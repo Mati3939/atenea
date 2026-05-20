@@ -1,0 +1,30 @@
+# Environment & secrets
+.env
+*.env
+secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ChromaDB local data
+chroma_db/
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude internal
+.claude/
