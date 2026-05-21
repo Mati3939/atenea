@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Atenea{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <p class="subtitle">Gestiona tus cursos y prepara tu base de conocimiento</p>
+</div>
+
+<div class="cards">
+
+  <!-- Sync Card -->
+  <div class="card">
+    <h2>Sincronizar Canvas</h2>
+    <p>Escanea Canvas, compara con archivos locales y descarga solo lo nuevo.</p>
+    <button id="sync-btn" class="btn btn-primary" onclick="startSync()">Sincronizar</button>
+    <div id="sync-progress" class="progress-wrap" style="display:none">
+      <div class="progress-phase" id="sync-phase"></div>
+      <div class="progress-track">
+        <div class="progress-fill" id="sync-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-stats" id="sync-stats"></div>
+    </div>
+  </div>
+
+  <!-- Ingest Card -->
+  <div class="card">
+    <h2>Indexar Documentos</h2>
+    <p>Procesa los archivos descargados y los carga en la base de conocimiento.</p>
+    <button id="ingest-btn" class="btn btn-primary" onclick="startIngest()">Indexar</button>
+    <div id="ingest-progress" class="progress-wrap" style="display:none">
+      <div class="progress-phase" id="ingest-phase"></div>
+      <div class="progress-track">
+        <div class="progress-fill" id="ingest-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-stats" id="ingest-stats"></div>
+    </div>
+  </div>
+
+  <!-- Courses Card -->
+  <div class="card card-wide">
+    <h2>Cursos Indexados</h2>
+    {% if courses %}
+      <ul class="course-list">
+        {% for c in courses %}
+          <li>
+            <span class="course-dot"></span>
+            {{ c }}
+            <a href="/chat?course={{ c }}" class="btn-small">Estudiar</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No hay cursos indexados. Sincroniza Canvas y luego indexa los documentos.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let syncPoll = null;
+let ingestPoll = null;
+
+// ── Sync ───────────────────────────────────────────
+async function startSync() {
+  document.getElementById('sync-btn').disabled = true;
+  showProgress('sync');
+  await fetch('/api/sync', { method: 'POST' });
+  syncPoll = setInterval(pollSync, 1000);
+}
+
+async function pollSync() {
+  const d = await fetch('/api/sync/status').then(r => r.json());
+  updateProgress('sync', d);
+  if (d.error) {
+    clearInterval(syncPoll);
+    document.getElementById('sync-btn').disabled = false;
+  } else if (d.done) {
+    clearInterval(syncPoll);
+    document.getElementById('sync-btn').disabled = false;
+  }
+}
+
+// ── Ingest ─────────────────────────────────────────
+async function startIngest() {
+  document.getElementById('ingest-btn').disabled = true;
+  showProgress('ingest');
+  await fetch('/api/ingest', { method: 'POST' });
+  ingestPoll = setInterval(pollIngest, 1000);
+}
+
+async function pollIngest() {
+  const d = await fetch('/api/ingest/status').then(r => r.json());
+  updateProgress('ingest', d);
+  if (d.error) {
+    clearInterval(ingestPoll);
+    document.getElementById('ingest-btn').disabled = false;
+  } else if (d.done) {
+    clearInterval(ingestPoll);
+    document.getElementById('ingest-btn').disabled = false;
+    setTimeout(() => location.reload(), 1500);
+  }
+}
+
+// ── Helpers ────────────────────────────────────────
+function showProgress(op) {
+  document.getElementById(op + '-progress').style.display = 'flex';
+}
+
+function updateProgress(op, d) {
+  const pct = d.percentage || 0;
+  document.getElementById(op + '-fill').style.width = pct + '%';
+  document.getElementById(op + '-phase').textContent = d.error
+    ? 'Error: ' + d.error
+    : (d.phase || '');
+
+  let stats = '';
+  if (op === 'sync') {
+    const parts = [];
+    if (d.total_new)   parts.push(d.total_new + ' nuevos');
+    if (d.downloaded)  parts.push(d.downloaded + ' descargados');
+    if (d.skipped)     parts.push(d.skipped + ' ya existian');
+    if (d.errors)      parts.push(d.errors + ' errores');
+    if (d.current)     parts.push('↓ ' + d.current);
+    stats = parts.join(' · ');
+  } else {
+    if (d.total_files) stats = d.processed + ' / ' + d.total_files + ' archivos';
+    if (d.current)     stats += ' — ' + d.current;
+  }
+  document.getElementById(op + '-stats').textContent = stats;
+}
+</script>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Chat — Atenea{% endblock %}
+
+{% block content %}
+<div class="chat-wrapper">
+
+  <div class="chat-header">
+    <div class="chat-header-left">
+      <h1>Chat</h1>
+      {% if courses %}
+        <select id="course-select" class="course-select">
+          <option value="">Todos los cursos</option>
+          {% for c in courses %}
+            <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        <span class="empty">Sin cursos indexados</span>
+      {% endif %}
+    </div>
+    <button class="btn btn-secondary" onclick="newChat()">Nueva sesion</button>
+  </div>
+
+  <div id="messages" class="messages"></div>
+
+  <div class="chat-input-area">
+    <textarea id="input" class="chat-input" placeholder="Escribe tu pregunta..." rows="1"></textarea>
+    <button id="send-btn" class="btn btn-primary" onclick="sendMessage()">Enviar</button>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/chat.js"></script>
+<script>
+  // Pre-select course from query param
+  const params = new URLSearchParams(location.search);
+  const preselect = params.get('course');
+  if (preselect) {
+    const sel = document.getElementById('course-select');
+    if (sel) {
+      for (const opt of sel.options) {
+        if (opt.value === preselect) { opt.selected = true; break; }
+      }
+    }
+  }
+</script>
+{% endblock %}

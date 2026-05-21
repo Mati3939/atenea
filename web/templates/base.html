@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Atenea{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-circle">A</div>
+      <div>
+        <div class="logo-title">Atenea</div>
+        <div class="logo-sub">Asistente de Estudio</div>
+      </div>
+    </div>
+    <nav>
+      <a href="/"        class="nav-link {% if active_page == 'home'     %}active{% endif %}">Dashboard</a>
+      <a href="/chat"    class="nav-link {% if active_page == 'chat'     %}active{% endif %}">Chat</a>
+      <a href="/analysis"class="nav-link {% if active_page == 'analysis' %}active{% endif %}">Analisis</a>
+    </nav>
+  </aside>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

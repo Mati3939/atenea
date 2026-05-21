@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Analisis — Atenea{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Analisis de Estudio</h1>
+  <p class="subtitle">Detecta debilidades en tu metodo de estudio basado en tus sesiones de chat.</p>
+</div>
+
+<div class="card">
+  <p>Atenea analizara todas tus sesiones anteriores e identificara patrones, temas recurrentes y sugiere mejoras personalizadas.</p>
+  <button id="gen-btn" class="btn btn-primary" style="margin-top:1rem" onclick="generateReport()">
+    Generar Reporte
+  </button>
+</div>
+
+<div id="report-box" class="card" style="display:none">
+  <h2>Reporte</h2>
+  <div id="report-content" class="report-text"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function generateReport() {
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+  btn.textContent = 'Generando...';
+
+  const res = await fetch('/api/analysis/generate', { method: 'POST' });
+  const data = await res.json();
+
+  btn.disabled = false;
+  btn.textContent = 'Generar Reporte';
+
+  const box = document.getElementById('report-box');
+  const content = document.getElementById('report-content');
+  box.style.display = 'block';
+
+  if (data.error) {
+    content.textContent = 'Error: ' + data.error;
+    content.style.color = '#e53e3e';
+  } else {
+    content.innerHTML = formatText(data.report);
+  }
+}
+
+function formatText(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+</script>
+{% endblock %}
