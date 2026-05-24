@@ -14,6 +14,19 @@ class Retriever:
         sources = [r["metadata"] for r in results]
         return context, sources
 
+    def get_context_for_unit(
+        self, query: str, collection_name: str, unit_name: str, n: int = 5
+    ) -> tuple[str, list[dict]]:
+        """Retrieve context filtered by unit name. Falls back to full collection if no results."""
+        results = self.store.query_by_unit(collection_name, query, unit_name, n_results=n)
+        if not results:
+            results = self.store.query(collection_name, query, n_results=n)
+        if not results:
+            return "", []
+        context = "\n\n---\n\n".join(r["text"] for r in results)
+        sources = [r["metadata"] for r in results]
+        return context, sources
+
     def get_context_all(self, query: str, n_per_collection: int = 2) -> tuple[str, list[dict]]:
         """Busca en todas las colecciones."""
         all_results = []

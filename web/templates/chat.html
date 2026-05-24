@@ -11,20 +11,29 @@
         <select id="course-select" class="course-select">
           <option value="">Todos los cursos</option>
           {% for c in courses %}
-            <option value="{{ c }}">{{ c }}</option>
+            <option value="{{ c.value }}">{{ c.label }}</option>
           {% endfor %}
+        </select>
+        <select id="unit-select" class="course-select unit-select" style="display:none">
+          <option value="">Todas las unidades</option>
+        </select>
+        <select id="difficulty-select" class="course-select difficulty-select">
+          <option value="aprendiendo">Aprendiendo</option>
+          <option value="practicando" selected>Practicando</option>
+          <option value="evaluando">Evaluando</option>
+          <option value="desafiando">Desafiando</option>
         </select>
       {% else %}
         <span class="empty">Sin cursos indexados</span>
       {% endif %}
     </div>
-    <button class="btn btn-secondary" onclick="newChat()">Nueva sesion</button>
+    <button class="btn btn-secondary" onclick="newChat()">Nueva sesión</button>
   </div>
 
   <div id="messages" class="messages"></div>
 
   <div class="chat-input-area">
-    <textarea id="input" class="chat-input" placeholder="Escribe tu pregunta..." rows="1"></textarea>
+    <textarea id="input" class="chat-input" placeholder="Escribe tu respuesta o pregunta..." rows="1"></textarea>
     <button id="send-btn" class="btn btn-primary" onclick="sendMessage()">Enviar</button>
   </div>
 
@@ -34,7 +43,7 @@
 {% block scripts %}
 <script src="/static/chat.js"></script>
 <script>
-  // Pre-select course from query param
+  // Pre-select course from query param (value = safe name)
   const params = new URLSearchParams(location.search);
   const preselect = params.get('course');
   if (preselect) {
@@ -43,6 +52,7 @@
       for (const opt of sel.options) {
         if (opt.value === preselect) { opt.selected = true; break; }
       }
+      sel.dispatchEvent(new Event('change'));
     }
   }
 </script>

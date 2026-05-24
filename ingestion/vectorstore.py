@@ -48,3 +48,55 @@ class VectorStore:
 
     def list_collections(self) -> list[str]:
         return [c.name for c in self.client.list_collections()]
+
+    def list_files_in_collection(self, collection_name: str) -> list[str]:
+        try:
+            col = self.client.get_collection(self._safe_name(collection_name))
+            result = col.get(include=["metadatas"])
+            files: set[str] = set()
+            for meta in (result["metadatas"] or []):
+                if meta and "file" in meta:
+                    files.add(meta["file"])
+            return sorted(files)
+        except Exception:
+            return []
+
+    def query_by_unit(
+        self, collection_name: str, query: str, unit_name: str, n_results: int = 5
+    ) -> list[dict]:
+        """Query only chunks that belong to a specific unit (metadata field 'unit')."""
+        collection = self.get_or_create_collection(collection_name)
+        count = collection.count()
+        if count == 0:
+            return []
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=min(n_results, count),
+                where={"unit": unit_name},
+            )
+            docs = results["documents"][0]
+            metas = results["metadatas"][0]
+            return [{"text": doc, "metadata": meta} for doc, meta in zip(docs, metas)]
+        except Exception:
+            return []
+
+    def query_with_filter(
+        self, collection_name: str, query: str, file_filter: str, n_results: int = 5
+    ) -> list[dict]:
+        collection = self.get_or_create_collection(collection_name)
+        count = collection.count()
+        if count == 0:
+            return []
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=min(n_results, count),
+                where={"file": file_filter},
+            )
+            return [
+                {"text": doc, "metadata": meta}
+                for doc, meta in zip(results["documents"][0], results["metadatas"][0])
+            ]
+        except Exception:
+            return self.query(collection_name, query, n_results)

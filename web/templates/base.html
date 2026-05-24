@@ -4,6 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Atenea{% endblock %}</title>
+
+  <!-- Fonts: async, non-render-blocking -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        media="print" onload="this.media='all'">
+  <noscript>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  </noscript>
+
+  <!-- KaTeX: CSS sync (needed before render), JS deferred (non-blocking) -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -16,9 +34,9 @@
       </div>
     </div>
     <nav>
-      <a href="/"        class="nav-link {% if active_page == 'home'     %}active{% endif %}">Dashboard</a>
-      <a href="/chat"    class="nav-link {% if active_page == 'chat'     %}active{% endif %}">Chat</a>
-      <a href="/analysis"class="nav-link {% if active_page == 'analysis' %}active{% endif %}">Analisis</a>
+      <a href="/"         class="nav-link {% if active_page == 'home'     %}active{% endif %}">Dashboard</a>
+      <a href="/chat"     class="nav-link {% if active_page == 'chat'     %}active{% endif %}">Chat</a>
+      <a href="/analysis" class="nav-link {% if active_page == 'analysis' %}active{% endif %}">Análisis</a>
     </nav>
   </aside>
   <main class="main">

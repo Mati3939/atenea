@@ -1,21 +1,21 @@
 {% extends "base.html" %}
-{% block title %}Analisis — Atenea{% endblock %}
+{% block title %}Análisis — Atenea{% endblock %}
 
 {% block content %}
 <div class="page-header">
-  <h1>Analisis de Estudio</h1>
-  <p class="subtitle">Detecta debilidades en tu metodo de estudio basado en tus sesiones de chat.</p>
+  <h1>Análisis de Estudio</h1>
+  <p class="subtitle">Detecta debilidades en tu método de estudio basado en tus sesiones de chat.</p>
 </div>
 
 <div class="card">
-  <p>Atenea analizara todas tus sesiones anteriores e identificara patrones, temas recurrentes y sugiere mejoras personalizadas.</p>
-  <button id="gen-btn" class="btn btn-primary" style="margin-top:1rem" onclick="generateReport()">
+  <p>Atenea analizará todas tus sesiones e identificará dónde te trabas, qué patrones tienes y qué mejorar.</p>
+  <button id="gen-btn" class="btn btn-primary" style="margin-top:.5rem" onclick="generateReport()">
     Generar Reporte
   </button>
 </div>
 
 <div id="report-box" class="card" style="display:none">
-  <h2>Reporte</h2>
+  <h2>Reporte personalizado</h2>
   <div id="report-content" class="report-text"></div>
 </div>
 {% endblock %}
@@ -25,32 +25,79 @@
 async function generateReport() {
   const btn = document.getElementById('gen-btn');
   btn.disabled = true;
-  btn.textContent = 'Generando...';
+  btn.textContent = 'Analizando sesiones…';
 
-  const res = await fetch('/api/analysis/generate', { method: 'POST' });
-  const data = await res.json();
+  try {
+    const res  = await fetch('/api/analysis/generate', { method: 'POST' });
+    const data = await res.json();
 
-  btn.disabled = false;
-  btn.textContent = 'Generar Reporte';
+    const box     = document.getElementById('report-box');
+    const content = document.getElementById('report-content');
+    box.style.display = 'flex';
 
-  const box = document.getElementById('report-box');
-  const content = document.getElementById('report-content');
-  box.style.display = 'block';
-
-  if (data.error) {
-    content.textContent = 'Error: ' + data.error;
-    content.style.color = '#e53e3e';
-  } else {
-    content.innerHTML = formatText(data.report);
+    if (data.error) {
+      content.innerHTML = `<span style="color:#ef4444">Error: ${data.error}</span>`;
+    } else {
+      content.innerHTML = formatReport(data.report);
+      if (window.renderMathInElement) {
+        renderMathInElement(content, {
+          delimiters: [
+            {left:'$$',right:'$$',display:true},
+            {left:'$', right:'$', display:false},
+          ],
+          throwOnError: false,
+        });
+      }
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generar Reporte';
   }
 }
 
-function formatText(text) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+function formatReport(text) {
+  const safe = text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  return safe
+    // Section headers **TITLE** on their own line → styled block
+    .replace(/^\*\*([^*]+)\*\*\s*$/gm,
+      '<div class="report-section">$1</div>')
+    // Inline bold
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // Inline italic
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // Numbered or bulleted list items
+    .replace(/^(\d+\.\s.+)$/gm, '<div class="report-item">$1</div>')
+    .replace(/^[-•]\s(.+)$/gm,  '<div class="report-item">• $1</div>')
+    // Remaining newlines
     .replace(/\n/g, '<br>');
 }
 </script>
+
+<style>
+.report-text { white-space: normal; }
+
+.report-section {
+  display: inline-block;
+  margin: 1.25rem 0 .5rem;
+  font-weight: 800;
+  font-size: .8rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--primary);
+  border-bottom: 2px solid var(--primary-glow);
+  padding-bottom: .2rem;
+}
+
+.report-item {
+  padding: .3rem 0 .3rem 1rem;
+  border-left: 3px solid var(--border);
+  margin: .25rem 0;
+  font-size: .875rem;
+  line-height: 1.6;
+  transition: border-color .15s;
+}
+.report-item:hover { border-left-color: var(--primary); }
+</style>
 {% endblock %}

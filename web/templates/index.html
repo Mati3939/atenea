@@ -26,7 +26,7 @@
   <!-- Ingest Card -->
   <div class="card">
     <h2>Indexar Documentos</h2>
-    <p>Procesa los archivos descargados y los carga en la base de conocimiento.</p>
+    <p>Procesa los archivos, detecta unidades desde la calendarización e indexa en la base de conocimiento.</p>
     <button id="ingest-btn" class="btn btn-primary" onclick="startIngest()">Indexar</button>
     <div id="ingest-progress" class="progress-wrap" style="display:none">
       <div class="progress-phase" id="ingest-phase"></div>
@@ -45,8 +45,8 @@
         {% for c in courses %}
           <li>
             <span class="course-dot"></span>
-            {{ c }}
-            <a href="/chat?course={{ c }}" class="btn-small">Estudiar</a>
+            {{ c.label }}
+            <a href="/chat?course={{ c.value }}" class="btn-small">Estudiar</a>
           </li>
         {% endfor %}
       </ul>
@@ -63,7 +63,6 @@
 let syncPoll = null;
 let ingestPoll = null;
 
-// ── Sync ───────────────────────────────────────────
 async function startSync() {
   document.getElementById('sync-btn').disabled = true;
   showProgress('sync');
@@ -74,16 +73,12 @@ async function startSync() {
 async function pollSync() {
   const d = await fetch('/api/sync/status').then(r => r.json());
   updateProgress('sync', d);
-  if (d.error) {
-    clearInterval(syncPoll);
-    document.getElementById('sync-btn').disabled = false;
-  } else if (d.done) {
+  if (d.error || d.done) {
     clearInterval(syncPoll);
     document.getElementById('sync-btn').disabled = false;
   }
 }
 
-// ── Ingest ─────────────────────────────────────────
 async function startIngest() {
   document.getElementById('ingest-btn').disabled = true;
   showProgress('ingest');
@@ -94,17 +89,13 @@ async function startIngest() {
 async function pollIngest() {
   const d = await fetch('/api/ingest/status').then(r => r.json());
   updateProgress('ingest', d);
-  if (d.error) {
+  if (d.error || d.done) {
     clearInterval(ingestPoll);
     document.getElementById('ingest-btn').disabled = false;
-  } else if (d.done) {
-    clearInterval(ingestPoll);
-    document.getElementById('ingest-btn').disabled = false;
-    setTimeout(() => location.reload(), 1500);
+    if (d.done) setTimeout(() => location.reload(), 1500);
   }
 }
 
-// ── Helpers ────────────────────────────────────────
 function showProgress(op) {
   document.getElementById(op + '-progress').style.display = 'flex';
 }
@@ -113,17 +104,16 @@ function updateProgress(op, d) {
   const pct = d.percentage || 0;
   document.getElementById(op + '-fill').style.width = pct + '%';
   document.getElementById(op + '-phase').textContent = d.error
-    ? 'Error: ' + d.error
-    : (d.phase || '');
+    ? 'Error: ' + d.error : (d.phase || '');
 
   let stats = '';
   if (op === 'sync') {
     const parts = [];
-    if (d.total_new)   parts.push(d.total_new + ' nuevos');
-    if (d.downloaded)  parts.push(d.downloaded + ' descargados');
-    if (d.skipped)     parts.push(d.skipped + ' ya existian');
-    if (d.errors)      parts.push(d.errors + ' errores');
-    if (d.current)     parts.push('↓ ' + d.current);
+    if (d.total_new)  parts.push(d.total_new + ' nuevos');
+    if (d.downloaded) parts.push(d.downloaded + ' descargados');
+    if (d.skipped)    parts.push(d.skipped + ' ya existian');
+    if (d.errors)     parts.push(d.errors + ' errores');
+    if (d.current)    parts.push('↓ ' + d.current);
     stats = parts.join(' · ');
   } else {
     if (d.total_files) stats = d.processed + ' / ' + d.total_files + ' archivos';
