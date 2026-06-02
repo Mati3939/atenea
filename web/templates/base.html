@@ -20,7 +20,8 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+          onload="if(window._pendingMathRender){window._pendingMathRender();}"></script>
 
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -34,9 +35,12 @@
       </div>
     </div>
     <nav>
-      <a href="/"         class="nav-link {% if active_page == 'home'     %}active{% endif %}">Dashboard</a>
-      <a href="/chat"     class="nav-link {% if active_page == 'chat'     %}active{% endif %}">Chat</a>
-      <a href="/analysis" class="nav-link {% if active_page == 'analysis' %}active{% endif %}">Análisis</a>
+      <a href="/"         class="nav-link {% if active_page == 'chat'     %}active{% endif %}">
+        <span class="nav-icon">💬</span> Chat
+      </a>
+      <a href="/analysis" class="nav-link {% if active_page == 'analysis' %}active{% endif %}">
+        <span class="nav-icon">📊</span> Análisis
+      </a>
     </nav>
   </aside>
   <main class="main">

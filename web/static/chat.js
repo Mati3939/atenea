@@ -1,63 +1,97 @@
+// ── Session ───────────────────────────────────────────────────────────────────
 const SESSION_KEY = 'atenea_session_id';
-let sessionId = localStorage.getItem(SESSION_KEY) || createSessionId();
+let sessionId = localStorage.getItem(SESSION_KEY) || _mkSessionId();
 localStorage.setItem(SESSION_KEY, sessionId);
 
-function createSessionId() {
+function _mkSessionId() {
   return 'sess_' + Math.random().toString(36).slice(2, 11);
 }
 
-const messagesEl  = document.getElementById('messages');
-const inputEl     = document.getElementById('input');
-const sendBtn     = document.getElementById('send-btn');
-const courseEl    = document.getElementById('course-select');
-const unitEl      = document.getElementById('unit-select');
-const diffEl      = document.getElementById('difficulty-select');
+// ── App state ─────────────────────────────────────────────────────────────────
+let _flowState       = 'greeting'; // 'greeting' | 'choosing_mode' | 'choosing_course' | 'chatting'
+let _activeCourse    = null;       // safe_name para la API
+let _activeDifficulty = 'practicando';
+let _canvasCourses   = [];         // [{canvas_id, label, safe_name, indexed}]
+let _selectedMode    = null;       // 'estudiar' | 'ejercitar' | 'preguntar'
 
-function getCourse()     { return courseEl ? courseEl.value || null : null; }
-function getUnit()       { return unitEl   ? unitEl.value   || null : null; }
-function getDifficulty() { return diffEl   ? diffEl.value   || 'practicando' : 'practicando'; }
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const messagesEl = document.getElementById('messages');
+const inputEl    = document.getElementById('input');
+const sendBtn    = document.getElementById('send-btn');
+const badgeEl    = document.getElementById('course-badge');
 
 // ── Math rendering ─────────────────────────────────────────────────────────────
-
 const KATEX_OPTS = {
   delimiters: [
     { left: '$$', right: '$$', display: true  },
     { left: '$',  right: '$',  display: false },
-    { left: '\\(', right: '\\)', display: false },
     { left: '\\[', right: '\\]', display: true  },
+    { left: '\\(', right: '\\)', display: false },
   ],
   throwOnError: false,
 };
 
 function renderMath(el) {
-  if (window.renderMathInElement) renderMathInElement(el, KATEX_OPTS);
+  if (window.renderMathInElement) {
+    renderMathInElement(el, KATEX_OPTS);
+  } else {
+    // KaTeX deferred — queue for when it loads
+    window._pendingMathRender = () => {
+      document.querySelectorAll('.bubble.needs-math').forEach(b => {
+        renderMathInElement(b, KATEX_OPTS);
+        b.classList.remove('needs-math');
+      });
+      window._pendingMathRender = null;
+    };
+    el.classList.add('needs-math');
+  }
 }
 
 // ── Message rendering ──────────────────────────────────────────────────────────
-
-function appendMessage(role, html) {
-  const wrap = document.createElement('div');
+function appendMessage(role, text) {
+  const wrap   = document.createElement('div');
   wrap.className = `message ${role}`;
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.innerHTML = html;
+
+  if (role.includes('user')) {
+    bubble.textContent = text;
+  } else if (role === 'greeting') {
+    // Large greeting format
+    bubble.innerHTML = `<span class="greeting-title">${_esc(text)}</span>`;
+  } else {
+    bubble.innerHTML = _formatBot(text);
+    renderMath(bubble);
+  }
+
   wrap.appendChild(bubble);
   messagesEl.appendChild(wrap);
-  // Render math after inserting into DOM so element dimensions are available
-  if (role === 'assistant') renderMath(bubble);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return wrap;
 }
 
-function appendOptions(options) {
+function _updateMessage(wrap, text) {
+  const bubble = wrap.querySelector('.bubble');
+  bubble.innerHTML = _formatBot(text);
+  renderMath(bubble);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function appendOptions(options, handler = null) {
+  clearOptions();
   if (!options || !options.length) return;
   const row = document.createElement('div');
   row.className = 'quick-replies';
-  options.forEach(opt => {
+  options.forEach((opt, i) => {
     const btn = document.createElement('button');
     btn.className = 'quick-reply-btn';
+    btn.style.animationDelay = `${i * 0.05}s`;
     btn.textContent = opt;
-    btn.onclick = () => { clearOptions(); doSend(opt); };
+    btn.onclick = () => {
+      clearOptions();
+      if (handler) handler(opt);
+      else doSend(opt);
+    };
     row.appendChild(btn);
   });
   messagesEl.appendChild(row);
@@ -68,20 +102,164 @@ function clearOptions() {
   document.querySelectorAll('.quick-replies').forEach(r => r.remove());
 }
 
-function formatBot(text) {
-  // HTML-escape first, then apply markdown. No \n→<br>: CSS white-space:pre-wrap handles newlines.
-  const safe = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return safe
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g,     '<em>$1</em>')
-    .replace(/`(.*?)`/g,       '<code>$1</code>');
+// ── Text formatting ────────────────────────────────────────────────────────────
+function _esc(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _formatBot(text) {
+  // Extract LaTeX blocks before HTML-escaping so delimiters are preserved
+  const blocks = [];
+  let t = text
+    .replace(/\$\$[\s\S]*?\$\$/g,  m => { blocks.push(m); return `\x00B${blocks.length-1}\x00`; })
+    .replace(/\\\[[\s\S]*?\\\]/g,  m => { blocks.push(m); return `\x00B${blocks.length-1}\x00`; })
+    .replace(/\$[^$\n]+?\$/g,      m => { blocks.push(m); return `\x00B${blocks.length-1}\x00`; })
+    .replace(/\\\([^)]+?\\\)/g,    m => { blocks.push(m); return `\x00B${blocks.length-1}\x00`; });
+
+  // HTML-escape non-LaTeX content
+  t = _esc(t);
+
+  // Markdown: bold, italic, inline code
+  t = t
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,     '<em>$1</em>')
+    .replace(/`([^`\n]+)`/g,   '<code>$1</code>');
+
+  // Restore LaTeX blocks (unescaped)
+  t = t.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
+
+  return t;
+}
+
+// ── Greeting flow ──────────────────────────────────────────────────────────────
+function showGreeting() {
+  _flowState    = 'greeting';
+  _activeCourse = null;
+  _selectedMode = null;
+  messagesEl.innerHTML = '';
+
+  if (badgeEl) { badgeEl.textContent = ''; badgeEl.classList.remove('visible'); }
+
+  _setInputEnabled(false);
+
+  appendMessage('greeting', '¿Qué haremos hoy?');
+  appendOptions(
+    ['Estudiar 📚', 'Ejercitar ✏️', 'Preguntar 💬'],
+    _handleModeSelection
+  );
+}
+
+async function _handleModeSelection(mode) {
+  _selectedMode = mode;
+  appendMessage('user', mode);
+  _flowState = 'choosing_course';
+
+  const loading = appendMessage('assistant loading', 'Cargando tus ramos de Canvas...');
+
+  try {
+    const res  = await fetch('/api/canvas/courses');
+    const data = await res.json();
+    loading.remove();
+
+    if (data.error) {
+      appendMessage('assistant', `⚠️ ${data.error}`);
+      return;
+    }
+
+    _canvasCourses = data.courses || [];
+
+    if (!_canvasCourses.length) {
+      appendMessage('assistant', 'No encontré cursos activos en Canvas. Verifica tu token en `.env`.');
+      return;
+    }
+
+    appendMessage('assistant', '¿En qué ramo estamos trabajando?');
+    appendOptions(
+      _canvasCourses.map(c => c.label),
+      label => _handleCourseSelection(label)
+    );
+  } catch {
+    loading.remove();
+    appendMessage('assistant', 'No pude conectar con Canvas. Verifica la configuración en `.env`.');
+  }
+}
+
+async function _handleCourseSelection(label) {
+  const course = _canvasCourses.find(c => c.label === label);
+  if (!course) return;
+
+  appendMessage('user', label);
+  _activeCourse = course.safe_name;
+
+  if (badgeEl) { badgeEl.textContent = label; badgeEl.classList.add('visible'); }
+
+  if (!course.indexed) {
+    await _autoFetchCourse(course);
+    // Mark it as indexed locally so new chat doesn't re-fetch
+    course.indexed = true;
+  }
+
+  _flowState = 'chatting';
+  _setInputEnabled(true);
+
+  const modeVerb = _selectedMode.includes('Estudiar') ? 'estudiar'
+    : _selectedMode.includes('Ejercitar') ? 'practicar ejercicios en'
+    : 'resolver dudas sobre';
+
+  appendMessage('assistant', `¡Listo! Estamos para ${modeVerb} **${label}**. ¿Por dónde empezamos?`);
+
+  if (_selectedMode.includes('Ejercitar')) {
+    appendOptions(['Dame un ejercicio', 'Quiero el ejercicio más difícil']);
+  } else if (_selectedMode.includes('Estudiar')) {
+    appendOptions(['Explícame el tema central', 'Quiero un resumen de la unidad']);
+  } else {
+    appendOptions(['Tengo una duda específica', 'Explícame desde el principio']);
+  }
+}
+
+async function _autoFetchCourse(course) {
+  const loadWrap = appendMessage('assistant', 'Buscando tu material en Canvas...');
+  const bubble   = loadWrap.querySelector('.bubble');
+
+  try {
+    await fetch(
+      `/api/fetch/course/${course.canvas_id}?name=${encodeURIComponent(course.label)}`,
+      { method: 'POST' }
+    );
+  } catch {
+    bubble.innerHTML = _formatBot('⚠️ No pude iniciar la descarga. Continuaré sin material local.');
+    return;
+  }
+
+  for (let attempt = 0; attempt < 120; attempt++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let status;
+    try {
+      status = await fetch(`/api/fetch/course/${course.canvas_id}/status`).then(r => r.json());
+    } catch {
+      break;
+    }
+
+    const pct    = Math.floor(status.percentage || 0);
+    const filled = Math.floor(pct / 10);
+    const bar    = '▓'.repeat(filled) + '░'.repeat(10 - filled);
+    bubble.innerHTML = _formatBot(
+      `Buscando material en Canvas...\n${bar} ${pct}%\n*${status.phase || ''}*`
+    );
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    if (status.done) {
+      bubble.innerHTML = _formatBot('✅ ¡Material cargado! Ya tengo tus documentos listos.');
+      break;
+    }
+    if (status.error) {
+      bubble.innerHTML = _formatBot(`⚠️ Hubo un problema al cargar el material: ${status.error}\n\nIntentaré responder con lo que tengo.`);
+      break;
+    }
+  }
 }
 
 // ── Send logic ─────────────────────────────────────────────────────────────────
-
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
@@ -91,9 +269,10 @@ async function sendMessage() {
 }
 
 async function doSend(text) {
+  if (_flowState !== 'chatting') return;
   clearOptions();
-  appendMessage('user', text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
-  sendBtn.disabled = true;
+  appendMessage('user', text);
+  _setInputEnabled(false);
 
   const loading = appendMessage('assistant loading', 'Pensando...');
 
@@ -104,83 +283,49 @@ async function doSend(text) {
       body: JSON.stringify({
         session_id: sessionId,
         message:    text,
-        course:     getCourse(),
-        unit:       getUnit(),
-        difficulty: getDifficulty(),
+        course:     _activeCourse,
+        unit:       null,
+        difficulty: _activeDifficulty,
       }),
     });
     const data = await res.json();
     loading.remove();
-    appendMessage('assistant', data.error ? `Error: ${data.error}` : formatBot(data.response));
-    appendOptions(data.options);
+    appendMessage('assistant', data.error ? `❌ Error: ${data.error}` : data.response);
+    if (data.options) appendOptions(data.options);
   } catch {
     loading.remove();
-    appendMessage('assistant', 'Error al conectar con el servidor.');
+    appendMessage('assistant', '❌ Error al conectar con el servidor.');
   } finally {
-    sendBtn.disabled = false;
+    _setInputEnabled(true);
     inputEl.focus();
   }
 }
 
 // ── New chat ───────────────────────────────────────────────────────────────────
-
 async function newChat() {
-  await fetch(`/api/session/${sessionId}`, { method: 'DELETE' });
-  sessionId = createSessionId();
+  try { await fetch(`/api/session/${sessionId}`, { method: 'DELETE' }); } catch {}
+  sessionId = _mkSessionId();
   localStorage.setItem(SESSION_KEY, sessionId);
-  messagesEl.innerHTML = '';
   showGreeting();
 }
 
-function showGreeting() {
-  appendMessage('assistant', '¡Hola! Soy Atenea. Selecciona un curso y unidad, luego elige cómo quieres comenzar.');
-  appendOptions(['Dame un ejercicio', 'Explícame el tema']);
-}
-
-// ── Unit selector ──────────────────────────────────────────────────────────────
-
-if (courseEl) {
-  courseEl.addEventListener('change', async () => {
-    if (!unitEl) return;
-    const course = getCourse();
-    unitEl.innerHTML = '<option value="">Todas las unidades</option>';
-
-    if (!course) {
-      unitEl.style.display = 'none';
-      return;
-    }
-
-    try {
-      const res  = await fetch(`/api/units/${encodeURIComponent(course)}`);
-      const data = await res.json();
-      if (data.units && data.units.length > 0) {
-        data.units.forEach(u => {
-          const opt = document.createElement('option');
-          opt.value = u;
-          opt.textContent = u;
-          unitEl.appendChild(opt);
-        });
-        unitEl.style.display = '';
-      } else {
-        unitEl.style.display = 'none';
-      }
-    } catch {
-      unitEl.style.display = 'none';
-    }
-  });
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function _setInputEnabled(enabled) {
+  inputEl.disabled = !enabled;
+  sendBtn.disabled = !enabled;
+  if (enabled) inputEl.placeholder = 'Escribe tu respuesta o pregunta...';
+  else         inputEl.placeholder = '';
 }
 
 // ── Input shortcuts ────────────────────────────────────────────────────────────
-
 inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
-  inputEl.style.height = inputEl.scrollHeight + 'px';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-
 showGreeting();

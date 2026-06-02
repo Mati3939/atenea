@@ -7,7 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -24,25 +24,8 @@ def _safe_name(name: str) -> str:
     return s.ljust(3, "0") if s else "col"
 
 
-def _resolve_courses() -> list[dict]:
-    """
-    Return [{value: safe_collection_name, label: human_readable_name}].
-    Maps ChromaDB safe names back to the original directory names in data/.
-    """
-    from ingestion.vectorstore import VectorStore
-    safe_names = VectorStore().list_collections()
-
-    data_dir = Path("data")
-    safe_to_label: dict[str, str] = {}
-    if data_dir.exists():
-        for d in data_dir.iterdir():
-            if d.is_dir():
-                safe_to_label[_safe_name(d.name)] = d.name
-
-    return [
-        {"value": s, "label": safe_to_label.get(s, s.replace("_", " ").strip())}
-        for s in safe_names
-    ]
+def _safe_folder(name: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
 
 
 def _get_store():
@@ -75,57 +58,49 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 chat_sessions: dict = {}
 
-
-def _sync_state(running=False):
-    return {
-        "running": running, "done": False, "error": None,
-        "phase": "Iniciando...", "percentage": 0,
-        "total_new": 0, "downloaded": 0, "skipped": 0, "errors": 0,
-        "current": None,
-    }
-
-
-def _ingest_state(running=False):
-    return {
-        "running": running, "done": False, "error": None,
-        "phase": "Iniciando...", "percentage": 0,
-        "total_files": 0, "processed": 0, "skipped": 0, "current": None,
-        "summary": None,
-    }
-
-
-_status = {
-    "sync":   _sync_state(),
-    "ingest": _ingest_state(),
-}
-
+_fetch_status: dict[int, dict] = {}  # canvas_id → status
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    courses = _resolve_courses()
-    return templates.TemplateResponse(request, "index.html", {
-        "active_page": "home",
-        "courses": courses,
-        "sync_status": _status["sync"],
-        "ingest_status": _status["ingest"],
+    return templates.TemplateResponse(request, "chat.html", {
+        "active_page": "chat",
     })
 
 
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
-    courses = _resolve_courses()
-    return templates.TemplateResponse(request, "chat.html", {
-        "active_page": "chat",
-        "courses": courses,
-    })
+    return RedirectResponse("/")
 
 
 @app.get("/analysis", response_class=HTMLResponse)
 async def analysis_page(request: Request):
     return templates.TemplateResponse(request, "analysis.html", {
         "active_page": "analysis",
+    })
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    """Página de administración (sync/ingest manual). No aparece en el nav principal."""
+    from ingestion.vectorstore import VectorStore
+    safe_names = VectorStore().list_collections()
+    data_dir = Path("data")
+    safe_to_label: dict[str, str] = {}
+    if data_dir.exists():
+        for d in data_dir.iterdir():
+            if d.is_dir():
+                safe_to_label[_safe_name(d.name)] = d.name
+    courses = [
+        {"value": s, "label": safe_to_label.get(s, s.replace("_", " ").strip())}
+        for s in safe_names
+    ]
+    return templates.TemplateResponse(request, "index.html", {
+        "active_page": "home",
+        "courses": courses,
+        "sync_status": _status["sync"],
+        "ingest_status": _status["ingest"],
     })
 
 
@@ -169,6 +144,128 @@ async def clear_session(session_id: str):
     return {"cleared": True}
 
 
+# ── Canvas courses API ────────────────────────────────────────────────────────
+
+@app.get("/api/canvas/courses")
+async def get_canvas_courses():
+    """Devuelve todos los cursos activos de Canvas con estado de indexación."""
+    try:
+        from canvas_api import CanvasClient
+        from ingestion.vectorstore import VectorStore
+
+        client = CanvasClient(os.environ["CANVAS_URL"], os.environ["CANVAS_TOKEN"])
+        courses = client.get_courses()
+
+        indexed_set = set(VectorStore().list_collections())
+
+        result = []
+        for c in courses:
+            name = c.get("name", str(c["id"]))
+            safe = _safe_name(_safe_folder(name))
+            result.append({
+                "canvas_id": c["id"],
+                "label":     name,
+                "safe_name": safe,
+                "indexed":   safe in indexed_set,
+            })
+
+        return {"courses": result}
+    except KeyError:
+        return JSONResponse({"error": "Canvas no configurado. Define CANVAS_URL y CANVAS_TOKEN en .env"}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Per-course fetch + index API ──────────────────────────────────────────────
+
+@app.post("/api/fetch/course/{canvas_id}")
+async def fetch_course(canvas_id: int, background_tasks: BackgroundTasks, name: str = ""):
+    """Descarga e indexa un solo curso de Canvas bajo demanda."""
+    if _fetch_status.get(canvas_id, {}).get("running"):
+        return {"status": "already_running"}
+
+    course_name = name or str(canvas_id)
+    _fetch_status[canvas_id] = {
+        "running": True, "done": False, "error": None,
+        "phase": "Iniciando...", "percentage": 0,
+    }
+    background_tasks.add_task(_run_fetch_course, canvas_id, course_name)
+    return {"status": "started"}
+
+
+def _run_fetch_course(canvas_id: int, course_name: str):
+    s = _fetch_status[canvas_id]
+    try:
+        from canvas_api import CanvasClient
+        from ingestion.parsers import parse, SUPPORTED
+        from ingestion.chunker import chunk
+        from ingestion.vectorstore import VectorStore
+
+        client = CanvasClient(os.environ["CANVAS_URL"], os.environ["CANVAS_TOKEN"])
+        data_dir = Path("data")
+        data_dir.mkdir(exist_ok=True)
+
+        course_dir = data_dir / _safe_folder(course_name)
+        course_dir.mkdir(parents=True, exist_ok=True)
+
+        # Fase 1: Descargar archivos nuevos
+        s["phase"] = "Conectando con Canvas..."
+        s["percentage"] = 5
+        files = client.get_course_files(canvas_id)
+        to_download = [
+            f for f in files
+            if not f.get("locked_for_user") and not (course_dir / f["filename"]).exists()
+        ]
+
+        s["phase"] = f"Descargando {len(to_download)} archivo(s)..."
+        s["percentage"] = 10
+
+        for i, f in enumerate(to_download):
+            s["phase"] = f"Descargando: {f['filename']}"
+            s["percentage"] = 10 + int(i / max(len(to_download), 1) * 45)
+            try:
+                client.download_file(f["url"], course_dir / f["filename"])
+            except Exception:
+                pass
+
+        # Fase 2: Indexar documentos nuevos
+        store = VectorStore()
+        course_name_safe = _safe_folder(course_name)
+
+        all_files = [f for f in course_dir.rglob("*") if f.suffix.lower() in SUPPORTED]
+        to_index  = [f for f in all_files if not store.is_file_indexed(course_name_safe, str(f))]
+
+        s["phase"] = f"Indexando {len(to_index)} documento(s)..."
+        s["percentage"] = 55
+
+        for i, f in enumerate(to_index):
+            s["phase"] = f"Indexando: {f.name}"
+            s["percentage"] = 55 + int(i / max(len(to_index), 1) * 43)
+            try:
+                text = parse(f)
+                if text.strip():
+                    chunks = chunk(text)
+                    meta = [{"course": course_name_safe, "file": f.name, "path": str(f)} for _ in chunks]
+                    store.add_chunks(course_name_safe, chunks, meta)
+            except Exception:
+                pass
+
+        s.update({
+            "percentage": 100,
+            "done": True,
+            "phase": f"Listo: {len(to_download)} descargados, {len(to_index)} indexados",
+        })
+    except Exception as e:
+        s["error"] = str(e)
+    finally:
+        s["running"] = False
+
+
+@app.get("/api/fetch/course/{canvas_id}/status")
+async def get_fetch_status(canvas_id: int):
+    return _fetch_status.get(canvas_id, {"done": False, "error": "Sin trabajo activo"})
+
+
 # ── Units API ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/units/{course}")
@@ -192,25 +289,34 @@ async def get_units(course: str):
             except Exception:
                 pass
 
-    # Fallback: file names
     return {"units": _get_store().list_files_in_collection(course)}
 
 
-@app.delete("/api/units/{course}/reset")
-async def reset_units(course: str):
-    """Delete _units.json so the next ingest re-analyzes the course."""
-    data_dir = Path("data")
-    if data_dir.exists():
-        for d in data_dir.iterdir():
-            if d.is_dir() and _safe_name(d.name) == course:
-                f = d / "_units.json"
-                if f.exists():
-                    f.unlink()
-                return {"reset": True, "course": d.name}
-    return {"reset": False}
+# ── Sync API (dashboard manual) ───────────────────────────────────────────────
+
+def _sync_state(running=False):
+    return {
+        "running": running, "done": False, "error": None,
+        "phase": "Iniciando...", "percentage": 0,
+        "total_new": 0, "downloaded": 0, "skipped": 0, "errors": 0,
+        "current": None,
+    }
 
 
-# ── Sync API ──────────────────────────────────────────────────────────────────
+def _ingest_state(running=False):
+    return {
+        "running": running, "done": False, "error": None,
+        "phase": "Iniciando...", "percentage": 0,
+        "total_files": 0, "processed": 0, "skipped": 0, "current": None,
+        "summary": None,
+    }
+
+
+_status = {
+    "sync":   _sync_state(),
+    "ingest": _ingest_state(),
+}
+
 
 @app.post("/api/sync")
 async def start_sync(background_tasks: BackgroundTasks):
@@ -219,10 +325,6 @@ async def start_sync(background_tasks: BackgroundTasks):
     _status["sync"] = _sync_state(running=True)
     background_tasks.add_task(_run_sync)
     return {"status": "started"}
-
-
-def _safe_folder(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
 
 
 def _run_sync():
@@ -287,7 +389,7 @@ async def get_sync_status():
     return _status["sync"]
 
 
-# ── Ingest API ────────────────────────────────────────────────────────────────
+# ── Ingest API (dashboard manual) ─────────────────────────────────────────────
 
 @app.post("/api/ingest")
 async def start_ingest(background_tasks: BackgroundTasks):
@@ -311,45 +413,32 @@ def _run_ingest():
 
     try:
         if not data_dir.exists():
-            raise FileNotFoundError("Carpeta 'data/' no encontrada. Sincroniza Canvas primero.")
+            raise FileNotFoundError("Carpeta 'data/' no encontrada.")
 
         course_dirs = sorted(d for d in data_dir.iterdir() if d.is_dir())
 
-        # Fase 0: calendarizaciones — solo cursos sin _units.json
         unit_maps: dict[str, dict] = {}
         for i, course_dir in enumerate(course_dirs):
             units_file = course_dir / "_units.json"
-
             if units_file.exists():
                 try:
-                    unit_maps[course_dir.name] = _json.loads(
-                        units_file.read_text(encoding="utf-8")
-                    )
+                    unit_maps[course_dir.name] = _json.loads(units_file.read_text(encoding="utf-8"))
                     continue
                 except Exception:
                     pass
-
-            s["phase"]      = f"Analizando unidades: {course_dir.name} (solo primera vez)"
+            s["phase"]      = f"Analizando unidades: {course_dir.name}"
             s["percentage"] = int(i / max(len(course_dirs), 1) * 30)
-
             try:
                 unit_data = build_unit_map(course_dir, model)
             except Exception:
                 unit_data = {"units": [], "file_map": {}}
-
-            # Always write — prevents retrying on every subsequent ingest
             try:
-                units_file.write_text(
-                    _json.dumps(unit_data, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                units_file.write_text(_json.dumps(unit_data, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 pass
-
             unit_maps[course_dir.name] = unit_data
 
-        # Fase 1: escanear archivos
-        s["phase"]      = "Escaneando documentos..."
+        s["phase"] = "Escaneando documentos..."
         s["percentage"] = 30
         all_files: list[tuple[str, Path]] = []
         for course_dir in course_dirs:
@@ -368,7 +457,6 @@ def _run_ingest():
         s["skipped"]     = skipped
         s["phase"]       = f"{len(to_index)} nuevos, {skipped} ya indexados. Indexando..."
 
-        # Fase 2: indexar con metadata de unidad
         totals: dict = {}
         for i, (course_name, f) in enumerate(to_index):
             s["current"]    = f.name
@@ -380,12 +468,8 @@ def _run_ingest():
                     file_map  = unit_maps.get(course_name, {}).get("file_map", {})
                     unit_name = file_map.get(f.name)
                     meta = [
-                        {
-                            "course": course_name,
-                            "file":   f.name,
-                            "path":   str(f),
-                            **({"unit": unit_name} if unit_name else {}),
-                        }
+                        {"course": course_name, "file": f.name, "path": str(f),
+                         **({"unit": unit_name} if unit_name else {})}
                         for _ in chunks
                     ]
                     store.add_chunks(course_name, chunks, meta)
