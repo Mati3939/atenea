@@ -9,7 +9,15 @@
       <span class="chat-title">Atenea</span>
       <span id="course-badge" class="chat-course-badge"></span>
     </div>
-    <button class="btn btn-secondary btn-sm" onclick="newChat()">Nueva sesión</button>
+    <div style="display:flex; align-items:center; gap:.6rem;">
+      <select id="difficulty" class="difficulty-select" title="Nivel de exigencia de los ejercicios">
+        <option value="aprendiendo">🌱 Aprendiendo</option>
+        <option value="practicando" selected>📘 Practicando</option>
+        <option value="evaluando">📝 Evaluando</option>
+        <option value="desafiando">🔥 Desafiando</option>
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="newChat()">Nueva sesión</button>
+    </div>
   </div>
 
   <div id="messages" class="messages"></div>

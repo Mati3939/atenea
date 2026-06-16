@@ -1,8 +1,7 @@
-import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-import ollama
+from chatbot import llm
 
 load_dotenv()
 
@@ -103,8 +102,6 @@ def generate_report() -> str:
     interactions = load_all_interactions()
     summary = build_summary(interactions)
 
-    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
-
     prompt = f"""Eres un tutor universitario analizando el progreso de un estudiante.
 
 Datos de sus sesiones de estudio:
@@ -124,8 +121,7 @@ Lista los temas concretos donde te equivocaste, necesitaste pistas o la solució
 **RECOMENDACIONES**
 Máximo 4 acciones concretas que puedes hacer hoy. Empieza cada una con un verbo de acción."""
 
-    response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-    report = response["message"]["content"]
+    report = llm.complete([{"role": "user", "content": prompt}])
     Path("reporte_estudio.txt").write_text(report, encoding="utf-8")
     return report
 

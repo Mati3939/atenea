@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Organización — Atenea{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Organización</h1>
+  <p class="subtitle">Calendario, eventos y planes de estudio con IA.</p>
+</div>
+
+<!-- ── Calendario mensual ──────────────────────────────────────────────────── -->
+<div class="card card-wide">
+  <div class="org-card-head">
+    <h2>📅 Calendario</h2>
+    <button class="btn btn-secondary btn-sm" onclick="loadCalendar()">Actualizar</button>
+  </div>
+  <div class="cal-header">
+    <button class="btn btn-secondary btn-sm" id="cal-prev" onclick="changeMonth(-1)">←</button>
+    <h3 id="cal-title">…</h3>
+    <button class="btn btn-secondary btn-sm" id="cal-today" onclick="goToday()">Hoy</button>
+    <button class="btn btn-secondary btn-sm" id="cal-next" onclick="changeMonth(1)">→</button>
+  </div>
+  <div class="cal-grid" id="cal-grid">
+    <div class="cal-dow">Lun</div>
+    <div class="cal-dow">Mar</div>
+    <div class="cal-dow">Mié</div>
+    <div class="cal-dow">Jue</div>
+    <div class="cal-dow">Vie</div>
+    <div class="cal-dow">Sáb</div>
+    <div class="cal-dow">Dom</div>
+  </div>
+  <p style="font-size:.75rem;color:var(--text-muted);margin-top:.6rem">
+    <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#3b82f6;margin-right:4px"></span>Canvas
+    &nbsp;
+    <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#22c55e;margin-right:4px"></span>Mis eventos
+    &nbsp; · Haz clic en un día para agregar un evento.
+  </p>
+</div>
+
+<!-- ── Plan de estudio ─────────────────────────────────────────────────────── -->
+<div class="card card-wide">
+  <div class="org-card-head">
+    <h2>🧭 Generar plan de estudio</h2>
+  </div>
+  <p style="font-size:.875rem;color:var(--text-light);margin-bottom:.75rem">
+    Elige un rango de fechas y los eventos de ese período se incluirán automáticamente en el plan.
+  </p>
+  <div class="plan-form">
+    <label>
+      Desde
+      <input type="date" id="plan-from">
+    </label>
+    <label>
+      Hasta
+      <input type="date" id="plan-to">
+    </label>
+    <label>
+      Método de estudio
+      <select id="plan-method">
+        <option value="auto">Recomendado (IA elige)</option>
+      </select>
+    </label>
+    <button class="btn btn-primary btn-sm" id="plan-btn" onclick="generatePlan()">Generar plan</button>
+  </div>
+  <div id="plan-content" class="report-text" style="display:none"></div>
+</div>
+
+<!-- ── Modal crear evento ──────────────────────────────────────────────────── -->
+<div id="event-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <h3>📌 Agregar evento</h3>
+    <div class="modal-field">
+      <label>Nombre / evaluación</label>
+      <input type="text" id="ev-title" placeholder="ej. Control 6 Álgebra Lineal">
+    </div>
+    <div class="modal-field">
+      <label>Tipo</label>
+      <select id="ev-type">
+        <option value="Control">Control</option>
+        <option value="Tarea">Tarea</option>
+        <option value="Proyecto">Proyecto</option>
+        <option value="Examen">Examen</option>
+        <option value="Presentación">Presentación</option>
+        <option value="Otro">Otro</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>Fecha</label>
+      <input type="date" id="ev-date">
+    </div>
+    <div class="modal-field">
+      <label>Temario (opcional)</label>
+      <textarea id="ev-syllabus" rows="3" placeholder="Temas que entran en la evaluación…"></textarea>
+    </div>
+    <!-- Eventos existentes en ese día -->
+    <div id="ev-existing" style="display:none">
+      <div style="font-size:.78rem;font-weight:700;color:var(--text-light);margin-bottom:.4rem">Eventos en este día</div>
+      <div id="ev-existing-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" onclick="saveEvent()">Guardar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/organizacion.js"></script>
+{% endblock %}

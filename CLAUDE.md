@@ -21,12 +21,17 @@ Atenea es una aplicación de estudio asistida por IA para estudiantes universita
 |------|-----------|
 | Lenguaje | Python 3.14 (Windows) |
 | Vector DB | ChromaDB (PersistentClient) |
-| LLM / Chat | **Ollama** (local, gratuito) — modelo configurable vía `.env` |
-| Canvas integration | Canvas REST API (token Bearer) |
-| Web | FastAPI + Jinja2 + vanilla JS |
+| Embeddings | Ollama **`paraphrase-multilingual`** (entiende español) — configurable vía `EMBEDDING_MODEL` |
+| LLM / Chat | **Groq** (`llama-3.3-70b-versatile`, nube, gratis) por defecto; **Ollama** (local) como fallback. Conmutable por `.env`. Abstracción en `chatbot/llm.py`. |
+| Canvas integration | Canvas REST API (token Bearer): archivos + Pages + Announcements + **Assignments (fechas)** + ZIP |
+| Web | FastAPI + Jinja2 + vanilla JS + **marked.js** + **KaTeX** (servidos localmente desde `web/static/vendor/`) |
 | Config / Secrets | `.env` |
 
-**Decisión clave:** Se migró de Anthropic API a **Ollama** (local, gratis) porque el usuario tiene Claude Pro pero no quiere pagar API separada. Default model: `llama3.2`.
+**Decisiones clave:**
+- **Motor IA conmutable** (`chatbot/llm.py`): si hay `GROQ_API_KEY` usa **Groq** (rápido ~1-3s, LaTeX limpio, gratis); sin key cae a **Ollama** local. Esto resolvió la lentitud (~2 min con `llama3.2:1b`) y el LaTeX roto, que eran el mismo problema de raíz: el modelo 1B.
+- Se mantiene **Ollama** como fallback offline y los embeddings siguen siendo Ollama (`paraphrase-multilingual`) independientemente del proveedor de chat.
+- El usuario tenía `llama3.2:1b` porque su GPU no soporta modelos más grandes — **NO sugerir subir el modelo local**; para velocidad/calidad se usa Groq.
+- Se conservan las defensas pensadas para modelos pequeños (normalizador de LaTeX `chatbot/latex.py`, intención por regex, detección conservadora de acierto) porque siguen ayudando con cualquier modelo y mantienen el fallback a Ollama robusto.
 
 ---
 
@@ -35,76 +40,122 @@ Atenea es una aplicación de estudio asistida por IA para estudiantes universita
 ```
 canvas_api/
   __init__.py
-  client.py           # CanvasClient: get_courses, get_course_files, download_file, sync_all
+  client.py           # CanvasClient: cursos, archivos, Pages, Announcements + html_to_text()
 ingestion/
   __init__.py
   parsers.py          # parse() para PDF/DOCX/PPTX/TXT/MD
   chunker.py          # chunk() ventana deslizante 400 palabras, 50 overlap
-  vectorstore.py      # VectorStore wrapper de ChromaDB
+  vectorstore.py      # VectorStore: ChromaDB + embeddings Ollama multilingües
 chatbot/
   __init__.py
-  prompts.py          # SYSTEM_PROMPT socrático
-  retriever.py        # Retriever: get_context() y get_context_all()
-  conversation.py     # AteneoChat: RAG + Ollama + historial + auto-save logs
+  llm.py              # Abstracción de modelo: provider()/complete()/stream()/warmup() — Groq o Ollama
+  prompts.py          # build_system_prompt(state, unit, difficulty, mode) — socrático
+  latex.py            # normalize_latex(): convierte LaTeX roto del modelo a $/$$
+  retriever.py        # Retriever: get_context(), get_context_all(), get_context_for_unit()
+  conversation.py     # AteneoChat: RAG + llm + streaming + máquina de estados + persistencia
 web/
   __init__.py
-  main.py             # FastAPI app: páginas + APIs de chat/sync/ingest/analysis
+  main.py             # FastAPI: páginas + chat (NDJSON) + sync/ingest/fetch + agenda + análisis + auto-sync
   templates/
-    base.html         # Layout con sidebar
+    base.html         # Layout con sidebar (Chat | Organización); carga KaTeX y marked locales
     index.html        # Dashboard con barras de progreso para sync e ingest
-    chat.html         # Interfaz de chat con selector de curso
-    analysis.html     # Generación de reporte de debilidades
+    chat.html         # Chat con selector de dificultad en el header
+    organizacion.html # Agenda Canvas + plan de estudio IA + métodos de estudio
+    analysis.html     # (legado; /analysis redirige a /organizacion)
   static/
-    style.css         # Estilos: sidebar azul oscuro, chat bubbles, progress bar
-    chat.js           # Lógica de chat (sessionId en localStorage, markdown básico)
+    style.css         # Paleta celeste/blanca, chat bubbles, agenda/organización, streaming cursor
+    chat.js           # Flujo modo→curso→unidad→chat, streaming, persistencia en localStorage
+    organizacion.js   # Agenda (/api/agenda), plan IA (/api/agenda/plan), reporte (/api/analysis/generate)
+    vendor/           # KaTeX 0.16.9 (+fonts) y marked 12 servidos localmente
 sync.py               # CLI para sincronizar Canvas (alternativa a web)
 ingest.py             # CLI para indexar documentos (alternativa a web)
 chat.py               # CLI para chatear (alternativa a web)
-analysis.py           # CLI + función generate_report() usada por la web
+analysis.py           # CLI + generate_report() usada por la web
 run.py                # Entry point: uvicorn en puerto 8080
+logs/                 # session_*.json (para análisis) + web_sessions/*.json (estado por sesión web)
 requirements.txt
 .env.example
 ```
 
 ---
 
-## Estado Actual — TODO COMPLETADO ✅
+## Estado Actual — FUNCIONAL END-TO-END ✅
 
-### Fase 1 — Canvas Integration ✅
-- `canvas_api/client.py`: autenticación Bearer, paginación automática, manejo de 401/403/404
-- `sync.py`: CLI entry point
+Fases 1-5 originales completas (Canvas, ingestion, chatbot socrático, análisis, web app).
 
-### Fase 2 — Ingestion Pipeline ✅
-- `ingestion/parsers.py`: PDF (PyMuPDF), DOCX, PPTX, TXT/MD
-- `ingestion/chunker.py`: ventana deslizante
-- `ingestion/vectorstore.py`: ChromaDB wrapper
-- `ingest.py`: CLI entry point
+### Mejoras sesión 2026-06-15 ✅ (preparación demo)
+1. **Motor IA conmutable Groq/Ollama** (`chatbot/llm.py`): `provider()`, `complete()`, `stream()`, `warmup()`. Por defecto Groq (`llama-3.3-70b-versatile`, REST OpenAI-compat con `requests`, streaming SSE) si hay `GROQ_API_KEY`; si no, Ollama. Centraliza TODAS las llamadas (antes dispersas en `conversation.py`, `analysis.py`, `calendar_parser.py`, warmup). **Resolvió la lentitud (~2 min → ~1-3s) y el LaTeX roto** (mismo origen: el modelo 1B).
+2. **LaTeX**: reglas de formato más estrictas en `prompts.py` (solo `$`/`$$`, ejemplos). Con el 70B llega bien formado; `latex.py` queda como red de seguridad.
+3. **Sync más rápido + en segundo plano**: descargas paralelas (`CanvasClient.download_many()` con `ThreadPoolExecutor`). **Auto-sync al arrancar** en `lifespan` (hilo daemon, `AUTO_SYNC=1`, guarda `logs/.autosync_done` para no relanzar en cada reload). No bloquea el arranque.
+4. **Sección Organización** (`/organizacion`, reemplaza a Análisis en el nav):
+   - **Agenda**: fechas reales desde Canvas (`CanvasClient.get_assignments()` → guardadas en `data/<curso>/_assignments.json` durante el sync). `GET /api/agenda` agrega todo; si no hay futuras (fin de semestre) cae a las más recientes (`fallback: true`).
+   - **Plan de estudio IA**: `POST /api/agenda/plan` usa el `Retriever` (material del curso) + `llm.complete()` para un plan día-a-día hasta la fecha.
+   - **Métodos de estudio**: el reporte de análisis (`/api/analysis/generate`) integrado como panel. `/analysis` redirige a `/organizacion`.
+5. **Unidades desde la calendarización al seleccionar curso**: `calendar_parser.detect_units()` (solo lista de unidades, rápido, prioriza el PDF de calendarización). `GET /api/units/{course}` las detecta on-demand y cachea en `_units.json` si faltan. El chat muestra "Leyendo la calendarización…" y luego "¿Qué unidad quieres preparar?" (límite subido a 25). Con Groq la extracción es buena (antes con el 1B salían 0 unidades).
+6. **Mejor extracción matemática de PDFs** (`ingestion/parsers.py`): compositor de acentos LaTeX (`contradicci´on` → `contradicción`, `teor´ıa` → `teoría`) + limpieza de espacios. Resuelve el texto roto de las "pautas". Límite: símbolos como ∫ (salen como `R`/`Z` por la fuente) y super/subíndices no se reconstruyen de forma fiable desde el PDF — la matemática **generada** por el modelo sí sale en LaTeX perfecto.
+7. **Filtro de cursos no académicos**: `_is_academic_course()` excluye cursos de Canvas que no son ramos (institucionales/genéricos/programas) del selector, el sync y la agenda. Defaults por nombre/`course_code` (concepcion_gen, viveudd, generico, estudiantes destacados, programa de estudiantes); configurable con `EXCLUDED_COURSES` en `.env`.
+8. **Grounding del chat en el material (fix de feedback)**:
+   - Intención: el regex ahora reconoce "muéstrame/dame ejemplo/enséñame/ver" como petición de ejercicio (antes caía en "answering" y consultaba la frase literal).
+   - `_TOPIC_RE` ya no toma temas basura ("ejercicio de **ejemplo**" → "ejemplo"); lista en `_JUNK_TOPICS`.
+   - La query RAG SIEMPRE se ancla a la unidad activa (en ejercicios y en preguntas), así el material recuperado es de la unidad elegida y no genérico.
+   - Prompt: sección "USO DEL MATERIAL DEL CURSO" obliga a basar explicaciones/ejercicios en el `[Material del curso]` y a respetar el enfoque del ramo (p. ej. cálculo integral → los ejercicios requieren integración).
+   - Detección de unidades más completa: ventana del PDF 5000→12000 y prompt exhaustivo ("no omitas ninguna"). Cálculo pasó de 4 a 6 unidades (recupera "integrales impropias" y "series").
+9. **Anti-eco del material (fix de feedback)**: `llama-3.3-70b` tendía a copiar/continuar el texto garbleado de los solucionarios (aparecían fragmentos rotos como "arcsin x 4 + C" al inicio). Soluciones combinadas:
+   - El material va como mensaje de **sistema** (referencia), no como prefijo del mensaje del usuario.
+   - En **ejercicios NO se adjunta material crudo**: el modelo genera mejor desde el tema de la unidad (que viene del curso) y así no copia pautas ni filtra soluciones.
+   - El RAG **excluye solucionarios** (pauta/control/certamen/prueba/examen) y prefiere guías/apuntes (`retriever._filter_solutions`): menos eco, sin filtrar soluciones, mejor pedagogía.
+   - Groq con reintentos ante 429/5xx (`llm._groq_post`) para que la demo no se caiga por rate limit.
 
-### Fase 3 — Chatbot RAG Socrático ✅
-- `chatbot/prompts.py`: nunca respuesta directa, explica base si es necesario
-- `chatbot/retriever.py`: busca en colección específica o en todas
-- `chatbot/conversation.py`: usa Ollama, historial limpio (contexto RAG no contamina history), auto-save a `logs/`
-- `chat.py`: CLI entry point
-
-### Fase 4 — Análisis de Debilidades ✅
-- Logs en `logs/session_YYYYMMDD_HHMMSS.json`
-- `analysis.py`: `generate_report()` analiza todos los logs con Ollama → `reporte_estudio.txt`
-
-### Fase 5 — Web App ✅
-- FastAPI + Jinja2 + vanilla JS en puerto **8080**
-- Dashboard con **barras de progreso** para sync e ingest (polling cada 1s)
-- Sync inteligente: escanea Canvas, compara con `data/`, descarga solo archivos nuevos
-- Chat con selector de curso, sesiones persistidas en localStorage
-- Página de análisis de debilidades
+### Mejoras sesión 2026-06-11 ✅
+1. **LaTeX arreglado** (problema principal reportado por el usuario):
+   - `chatbot/latex.py`: normaliza `\[..\]`, `\(..\)`, `[..]` y comandos sueltos → `$`/`$$` (con cuidado de no envolver prosa en español: "de", "y", vocales sueltas).
+   - Prompt con reglas de formato estrictas y simples.
+   - Frontend: marked.js (markdown completo) + extracción de segmentos LaTeX antes del markdown + KaTeX al final. HTML del modelo neutralizado (escape antes de marked).
+   - Backend desescapa entidades HTML que emite el 1B (`&#39;` → `'`).
+2. **Streaming**: `AteneoChat.chat_stream()` + `POST /api/chat/stream` (NDJSON: `{delta}` ... `{done, text, options}`). Frontend lo consume con cursor parpadeante; fallback automático a `/api/chat`.
+3. **Tutor más robusto**: intención por regex con límites de palabra (no más "tengo un problema" → ejercicio); historial limitado a 16 mensajes; query RAG inteligente (usa tema/unidad/enunciado activo en vez de "dame una pista" literal); indicadores de acierto solo con felicitaciones inequívocas + etiqueta `[[CORRECTO]]` pedida al modelo.
+4. **Modos** (estudiar/ejercitar/preguntar) ahora llegan al system prompt; **dificultad** seleccionable en el header del chat; **selector de unidad** tras elegir curso (si hay `_units.json` con ≤10 unidades).
+5. **Embeddings multilingües**: Ollama `paraphrase-multilingual` vía `EMBEDDING_MODEL`. Las colecciones guardan el modelo usado en metadata; si cambia, se re-indexa el curso automáticamente (los queries degradan a "sin contexto" mientras tanto).
+6. **Canvas ampliado**: Pages y Announcements se guardan como `.md` en `data/<curso>/Paginas|Anuncios/` y se indexan. ZIPs se descomprimen automáticamente (solo archivos soportados, con sanitización de rutas).
+7. **Errores visibles**: sync/fetch/ingest reportan `failures` (lista de archivos con error) en el status y en la frase final.
+8. **Persistencia de sesiones**: frontend repinta el chat desde localStorage al recargar; backend guarda estado completo en `logs/web_sessions/<sid>.json` y lo restaura tras reinicio del servidor. Máximo 30 sesiones en memoria (LRU con guardado al expulsar).
+9. **Sin CDN**: KaTeX + fuentes + marked servidos desde `web/static/vendor/` (funciona sin internet).
 
 ---
+
+## Plan en curso — Rediseño Organización + Métodos + Demo (sesión 2026-06-15b)
+
+Objetivo del usuario (ejecutar todo; actualizar estado tras cada pieza):
+
+- [x] **A. Calendario real**: vista mensual con flechas ←/→ y "Hoy"; pinta fechas Canvas + eventos usuario. Crear evento (fecha, tipo, nombre, temario opcional) en `logs/user_events.json`. `GET/POST/DELETE /api/events`. (Agente 1)
+- [x] **B. Plan por rango de fechas**: `POST /api/agenda/plan` extendido a `{from,to,events[],method}` → plan día a día. (Agente 1)
+- [x] **C. Sección "Métodos de estudio"** (`/metodos`): `chatbot/study_methods.py` (8 métodos), `GET /api/methods`, `GET /api/methods/recommend`, página metodos.html/js con recomendados + grid + detalle. (Agente 1)
+- [x] **D. Plan con método elegido**: selector de método en el form del plan ("Recomendado (IA elige)" por defecto). (Agente 1)
+- [x] **E. Material manual / cursos sin archivos**: backend `POST /api/upload/{course}` (Agente 1) + UI en chat: si el curso no tiene material, ofrece "Subir material" (input file → upload) o "Estudiar sin material (conocimiento general)" preguntando la unidad/tema (Agente 2).
+- [x] **F. Opciones tras cada mensaje del chatbot**: `conversation._advance_state` devuelve quick-replies por modo (estudiar/ejercitar/preguntar) en cada turno; `chat.js` las muestra. (Agente 2)
+- [x] **G. Modo Demo** `/demo` (`demo.html`/`demo.js`): tour con flechas y dots — intro, chat simulado (resumen+ejercicio con LaTeX), mockup de calendario, tarjetas de métodos. Sin llamadas a backend/LLM. (Agente 2)
+
+**Bugfix encontrado al verificar**: el fallback a Ollama usaba `model_name()` (devolvía el modelo de Groq → 404 en Ollama). Corregido: `llm._ollama_model()` siempre usa `OLLAMA_MODEL`.
+
+Verificado con TestClient: páginas `/ /organizacion /metodos /demo` (200), `/api/methods` (8), recommend, eventos CRUD, plan por rango+método (día a día, LaTeX limpio), quick-replies por modo. Pendiente: revisión visual en navegador (no hay Playwright instalado).
+
+Reparto de archivos para evitar conflictos (agentes sonnet, secuenciales):
+- Agente 1 (A,B,C,D,E backend): `web/main.py` (todas las rutas nuevas), `web/templates/organizacion.html`, `web/static/organizacion.js`, `web/templates/metodos.html`, `web/static/metodos.js`, `chatbot/study_methods.py`, `web/static/style.css`.
+- Agente 2 (F,G,E frontend): `chatbot/conversation.py` (quick-replies), `web/static/chat.js`, `web/templates/demo.html`, `web/static/demo.js` (+ append a `style.css`).
+- Manual (este hilo): `web/templates/base.html` (nav).
 
 ## Variables de Entorno (.env)
 
 ```
 CANVAS_URL=https://udd.instructure.com
 CANVAS_TOKEN=<token de Canvas>
-OLLAMA_MODEL=llama3.2
+GROQ_API_KEY=<key de https://console.groq.com/keys>   # si está, se usa Groq; si no, Ollama
+GROQ_MODEL=llama-3.3-70b-versatile
+LLM_PROVIDER=                              # "groq"|"ollama"|vacío (auto)
+OLLAMA_MODEL=llama3.2:1b                   # fallback local
+EMBEDDING_MODEL=paraphrase-multilingual   # "default" = embedding integrado de ChromaDB
+AUTO_SYNC=1                               # sincroniza Canvas en segundo plano al arrancar
+# OLLAMA_URL=http://localhost:11434
 ```
 
 ---
@@ -113,15 +164,18 @@ OLLAMA_MODEL=llama3.2
 
 ```bash
 pip install -r requirements.txt
-ollama pull llama3.2      # solo la primera vez
-python run.py             # levanta en http://127.0.0.1:8080
+ollama pull llama3.2:1b              # solo la primera vez
+ollama pull paraphrase-multilingual  # embeddings (solo la primera vez)
+python run.py                        # levanta en http://127.0.0.1:8080
 ```
 
+Para la demo/uso normal basta `python run.py` (Groq vía `.env`, sin necesidad de Ollama).
+Los `ollama pull` solo hacen falta para el fallback local o los embeddings.
+
 Flujo en la web:
-1. Dashboard → "Sincronizar Canvas" (descarga archivos nuevos con barra de progreso)
-2. Dashboard → "Indexar Documentos" (indexa en ChromaDB con barra de progreso)
-3. Chat → selecciona curso → estudia con el asistente socrático
-4. Análisis → genera reporte de debilidades
+1. Chat (página de inicio) → elige modo → ramo → unidad → estudia (el material se descarga/indexa solo).
+2. Organización → Agenda de Canvas + plan de estudio IA + revisión de métodos de estudio.
+3. Dashboard (`/dashboard`) → "Sincronizar Canvas" / "Indexar Documentos" (manual, con barras de progreso).
 
 ---
 
@@ -130,21 +184,30 @@ Flujo en la web:
 - **WinError 10013**: puerto ocupado → usar puerto 8080 en `run.py`
 - **TypeError en TemplateResponse**: Starlette nuevo requiere `(request, name, context)` no `(name, {"request":...})`
 - **401 Canvas**: token incorrecto o expirado → regenerar en Canvas → Configuración → Integraciones aprobadas
+- **LaTeX roto / IA lenta**: resuelto cambiando a **Groq** (`chatbot/llm.py`); `latex.py` + prompt estricto siguen como respaldo (sesión 2026-06-15)
+- **Consola Windows cp1252 (`UnicodeEncodeError` con `→`/acentos)**: afecta a los `print` de los CLI (`sync.py`) en consola, no a la web. Correr con `PYTHONIOENCODING=utf-8` o usar la app web.
+- **Groq 429 (rate limit)**: el free tier del 70B limita a **12.000 tokens/minuto** (no requests). Mitigado: contexto RAG acotado (3 chunks × 900 chars), historial 8 mensajes, `max_tokens=1024`, reintentos con backoff y **fallback automático a Ollama** si se agota el cupo (`llm.stream/complete`). Fix definitivo para uso intenso: subir a **Groq dev tier** (de pago, centavos) en console.groq.com/settings/billing → el TPM sube a ~300k. Alternativa: `GROQ_MODEL` más liviano.
+- **Embeddings dependen de Ollama** aunque el chat use Groq: el RAG necesita Ollama corriendo con `paraphrase-multilingual`. Si Ollama está caído, el indexado falla ("Failed to connect to Ollama") y el chat degrada silenciosamente a "sin contexto" (sigue respondiendo vía Groq, pero sin material del curso). **Para la demo: tener Ollama corriendo.** Si el indexado masivo falla por saturación, re-ejecutar el ingest (salta lo ya indexado).
+- **Archivos `._*` (AppleDouble de macOS) dentro de ZIPs**: no son PDFs reales; se ignoran al extraer e indexar (sesión 2026-06-15).
+- **PDFs escaneados (solo imagen)**: `parse()` devuelve vacío y se omiten (no hay OCR). Es esperado.
+- **Dashboard reporta "N indexados" = intentados, no exitosos**: si hay fallos, mirar el conteo "con error" para el real.
+- **Timeout en primer embedding**: la primera llamada carga el modelo en frío → timeout 300s + warmup al arrancar
+- **`llama3.2:1b` a veces revela la solución aunque el prompt lo prohíba**: limitación inherente del modelo 1B; la máquina de estados y los prompts lo mitigan pero no lo eliminan.
 
 ---
 
 ## Por Hacer (mejoras opcionales)
 
-- [ ] Streaming de respuestas del chat (Ollama soporta streaming)
 - [ ] Historial de reportes anteriores en la página de Análisis
 - [ ] Autenticación multi-usuario
-- [ ] Soporte para archivos ZIP en Canvas (descomprimir automáticamente)
+- [ ] Renderizar KaTeX progresivamente durante el streaming (hoy solo al final)
+- [ ] Detección de unidades automática para cursos sin `_units.json`
 
 ---
 
 ## Cómo Retomar en una Nueva Sesión
 
 1. Leer este archivo completo.
-2. El proyecto está **funcional end-to-end** — todas las fases están implementadas.
+2. El proyecto está **funcional end-to-end** — todas las fases están implementadas y probadas.
 3. Preguntar al usuario qué quiere mejorar o si encontró algún error.
 4. Al terminar, actualizar este archivo con los cambios realizados.

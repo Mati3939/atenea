@@ -1,6 +1,21 @@
+import html
 import re
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+
+def html_to_text(html_str: str) -> str:
+    """Convierte el HTML de páginas/anuncios de Canvas a texto plano legible."""
+    s = re.sub(r"(?is)<(script|style).*?</\1>", "", html_str or "")
+    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
+    s = re.sub(r"(?i)<li[^>]*>", "- ", s)
+    s = re.sub(r"(?i)</(p|div|li|h[1-6]|tr|table|ul|ol)>", "\n", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = html.unescape(s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
 
 
 class CanvasClient:
@@ -42,6 +57,49 @@ class CanvasClient:
                 return []
             raise
 
+    def get_pages(self, course_id: int) -> list[dict]:
+        """Lista las páginas de un curso (sin cuerpo; usar get_page_body)."""
+        url = f"{self.base_url}/api/v1/courses/{course_id}/pages"
+        try:
+            return self._get_paginated(url, params={"per_page": 100})
+        except requests.HTTPError as e:
+            if e.response.status_code in (401, 403, 404):
+                return []
+            raise
+
+    def get_page_body(self, course_id: int, page_url: str) -> str:
+        url = f"{self.base_url}/api/v1/courses/{course_id}/pages/{page_url}"
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json().get("body") or ""
+        except requests.HTTPError:
+            return ""
+
+    def get_assignments(self, course_id: int) -> list[dict]:
+        """Entregas/evaluaciones del curso con fecha (due_at, name, html_url)."""
+        url = f"{self.base_url}/api/v1/courses/{course_id}/assignments"
+        try:
+            return self._get_paginated(url, params={"per_page": 100, "order_by": "due_at"})
+        except requests.HTTPError as e:
+            if e.response.status_code in (401, 403, 404):
+                return []
+            raise
+
+    def get_announcements(self, course_id: int) -> list[dict]:
+        """Anuncios del curso (incluyen el cuerpo en 'message')."""
+        url = f"{self.base_url}/api/v1/announcements"
+        try:
+            return self._get_paginated(url, params={
+                "context_codes[]": f"course_{course_id}",
+                "start_date": "2020-01-01",
+                "per_page": 100,
+            })
+        except requests.HTTPError as e:
+            if e.response.status_code in (401, 403, 404):
+                return []
+            raise
+
     def download_file(self, file_url: str, dest_path: Path) -> None:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         with self.session.get(file_url, stream=True) as r:
@@ -49,6 +107,33 @@ class CanvasClient:
             with open(dest_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
+
+    def download_many(self, items: list[tuple[str, Path]], max_workers: int = 8,
+                      on_done=None) -> list[tuple[Path, Exception]]:
+        """Descarga (url, dest) en paralelo. Devuelve [(dest, excepción)] de los fallos.
+
+        `on_done(done, total)` se llama tras cada descarga para reportar progreso.
+        """
+        failures: list[tuple[Path, Exception]] = []
+        total = len(items)
+        if not total:
+            return failures
+        done = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(self.download_file, url, dest): dest for url, dest in items}
+            for fut in as_completed(futures):
+                dest = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    failures.append((dest, e))
+                done += 1
+                if on_done:
+                    try:
+                        on_done(done, total)
+                    except Exception:
+                        pass
+        return failures
 
     def sync_course(self, course: dict, dest_dir: Path) -> dict:
         """Descarga todos los archivos de un curso. Devuelve resumen {downloaded, skipped, errors}."""

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Métodos de estudio — Atenea{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Métodos de estudio</h1>
+  <p class="subtitle">Técnicas probadas para estudiar mejor. Atenea recomienda las más adecuadas según tus ramos.</p>
+</div>
+
+<!-- Recomendados -->
+<div class="card card-wide" id="recommended-section" style="display:none">
+  <div class="org-card-head">
+    <h2>⭐ Recomendados para tus cursos</h2>
+  </div>
+  <p style="font-size:.875rem;color:var(--text-light);margin-bottom:.75rem">
+    Basado en los nombres de tus ramos indexados, estas técnicas se adaptan mejor a tu carga académica actual.
+  </p>
+  <div id="recommended-grid" class="methods-grid"></div>
+</div>
+
+<!-- Todos los métodos -->
+<div class="card card-wide">
+  <div class="org-card-head">
+    <h2>📚 Todos los métodos</h2>
+  </div>
+  <p style="font-size:.875rem;color:var(--text-light);margin-bottom:.75rem">
+    Haz clic en cualquier método para ver cómo aplicarlo paso a paso.
+  </p>
+  <div id="methods-grid" class="methods-grid">
+    <div class="empty">Cargando métodos…</div>
+  </div>
+</div>
+
+<!-- Panel de detalle (modal inline) -->
+<div id="method-detail" class="card card-wide method-detail-panel" style="display:none">
+  <div class="org-card-head">
+    <h2 id="detail-title"></h2>
+    <button class="btn btn-secondary btn-sm" onclick="closeDetail()">✕ Cerrar</button>
+  </div>
+  <p id="detail-what" style="font-size:.9rem;line-height:1.75;color:var(--text);margin:.5rem 0 1rem"></p>
+  <h3 style="font-size:.9rem;font-weight:700;margin-bottom:.5rem;color:var(--text)">Cómo aplicarlo</h3>
+  <ol id="detail-steps" class="method-steps"></ol>
+  <div id="detail-tags" class="method-tags" style="margin-top:1rem"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/metodos.js"></script>
+{% endblock %}

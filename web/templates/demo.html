@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Demo — Atenea{% endblock %}
+
+{% block content %}
+<div class="demo-shell">
+  <header class="demo-header">
+    <h1 class="demo-title">Tour guiado</h1>
+    <span class="demo-step-label" id="demo-step-label">Paso 1 de 4</span>
+  </header>
+
+  <!-- Slides container -->
+  <div class="demo-stage" id="demo-stage">
+
+    <!-- Slide 0: Intro -->
+    <div class="demo-slide active" data-slide="0">
+      <div class="card demo-card">
+        <div class="demo-slide-icon">🦉</div>
+        <h2 class="demo-slide-title">Bienvenido a Atenea</h2>
+        <p class="demo-slide-caption">
+          Atenea es tu asistente de estudio universitario con IA. Conecta tu cuenta de
+          <strong>Canvas LMS</strong>, sube tus apuntes y chatea con un tutor socrático que
+          te guía hacia las respuestas <em>sin dártelas directamente</em>.
+        </p>
+        <ul class="demo-feature-list">
+          <li>📥 Descarga automática de material desde Canvas</li>
+          <li>🔍 Base de conocimiento vectorial sobre tus documentos</li>
+          <li>💬 Chat socrático con ejercicios adaptativos</li>
+          <li>📅 Calendario de estudio y técnicas de memoria</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Slide 1: Chat simulado -->
+    <div class="demo-slide" data-slide="1">
+      <div class="card demo-card demo-chat-card">
+        <h2 class="demo-slide-title">Chat socrático en acción</h2>
+        <p class="demo-slide-caption-sm">
+          Avanza para ver la conversación paso a paso.
+        </p>
+        <div class="demo-messages" id="demo-messages"></div>
+        <div class="quick-replies" id="demo-qr" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Slide 2: Calendario -->
+    <div class="demo-slide" data-slide="2">
+      <div class="card demo-card">
+        <h2 class="demo-slide-title">Organización y Calendario</h2>
+        <p class="demo-slide-caption">
+          Visualiza tus pruebas y horas de estudio sugeridas en un calendario mensual.
+          Atenea detecta tus materias y crea bloques de repaso con anticipación.
+        </p>
+        <div class="demo-calendar">
+          <div class="demo-cal-header">
+            <span>◀</span><span>Junio 2026</span><span>▶</span>
+          </div>
+          <div class="demo-cal-grid">
+            <div class="demo-cal-day-name">L</div><div class="demo-cal-day-name">M</div>
+            <div class="demo-cal-day-name">X</div><div class="demo-cal-day-name">J</div>
+            <div class="demo-cal-day-name">V</div><div class="demo-cal-day-name">S</div>
+            <div class="demo-cal-day-name">D</div>
+            <div class="demo-cal-day empty"></div>
+            <div class="demo-cal-day empty"></div>
+            <div class="demo-cal-day empty"></div>
+            <div class="demo-cal-day empty"></div>
+            <div class="demo-cal-day empty"></div>
+            <div class="demo-cal-day">1</div>
+            <div class="demo-cal-day">2</div>
+            <div class="demo-cal-day">3</div>
+            <div class="demo-cal-day">4</div>
+            <div class="demo-cal-day">5</div>
+            <div class="demo-cal-day">6</div>
+            <div class="demo-cal-day">7</div>
+            <div class="demo-cal-day">8</div>
+            <div class="demo-cal-day">9</div>
+            <div class="demo-cal-day">10</div>
+            <div class="demo-cal-day">11</div>
+            <div class="demo-cal-day">12</div>
+            <div class="demo-cal-day event-study">13<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day">14</div>
+            <div class="demo-cal-day">15</div>
+            <div class="demo-cal-day event-study">16<span class="cal-ev">📚 Repaso</span></div>
+            <div class="demo-cal-day">17</div>
+            <div class="demo-cal-day event-exam">18<span class="cal-ev">✏️ Prueba 1</span></div>
+            <div class="demo-cal-day">19</div>
+            <div class="demo-cal-day">20</div>
+            <div class="demo-cal-day">21</div>
+            <div class="demo-cal-day event-study">22<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day">23</div>
+            <div class="demo-cal-day">24</div>
+            <div class="demo-cal-day">25</div>
+            <div class="demo-cal-day">26</div>
+            <div class="demo-cal-day">27</div>
+            <div class="demo-cal-day event-exam">28<span class="cal-ev">✏️ Prueba 2</span></div>
+            <div class="demo-cal-day">29</div>
+            <div class="demo-cal-day">30</div>
+          </div>
+        </div>
+        <a href="/organizacion" class="btn btn-secondary btn-sm demo-cta">Ver mi calendario →</a>
+      </div>
+    </div>
+
+    <!-- Slide 3: Métodos -->
+    <div class="demo-slide" data-slide="3">
+      <div class="card demo-card">
+        <h2 class="demo-slide-title">Métodos de Estudio</h2>
+        <p class="demo-slide-caption">
+          Atenea te enseña las técnicas de aprendizaje más efectivas respaldadas por la ciencia.
+        </p>
+        <div class="demo-methods-grid">
+          <div class="demo-method-card">
+            <div class="demo-method-icon">🍅</div>
+            <div class="demo-method-name">Pomodoro</div>
+            <div class="demo-method-desc">25 min de enfoque + 5 min de descanso. Mantiene la concentración y evita el agotamiento mental.</div>
+          </div>
+          <div class="demo-method-card">
+            <div class="demo-method-icon">🔁</div>
+            <div class="demo-method-name">Repetición espaciada</div>
+            <div class="demo-method-desc">Repasa el material justo cuando estás a punto de olvidarlo. Maximiza la retención a largo plazo.</div>
+          </div>
+          <div class="demo-method-card">
+            <div class="demo-method-icon">🧑‍🏫</div>
+            <div class="demo-method-name">Método Feynman</div>
+            <div class="demo-method-desc">Explica el concepto como si se lo enseñaras a un niño. Lo que no puedes explicar, no lo entiendes aún.</div>
+          </div>
+        </div>
+        <a href="/metodos" class="btn btn-secondary btn-sm demo-cta">Explorar todos los métodos →</a>
+      </div>
+    </div>
+
+  </div><!-- /demo-stage -->
+
+  <!-- Navigation -->
+  <div class="demo-nav">
+    <button class="btn btn-secondary" id="demo-prev" onclick="demoNav(-1)" disabled>← Anterior</button>
+    <div class="demo-dots" id="demo-dots"></div>
+    <button class="btn btn-primary" id="demo-next" onclick="demoNav(1)">Siguiente →</button>
+  </div>
+
+  <!-- Final CTA shown on last slide -->
+  <div class="demo-final" id="demo-final" style="display:none">
+    <a href="/" class="btn btn-primary">Empezar a estudiar</a>
+    <a href="/organizacion" class="btn btn-secondary">Ver mi calendario</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/demo.js"></script>
+{% endblock %}

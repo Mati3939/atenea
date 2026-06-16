@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-import ollama
+from chatbot import llm
 
 # Extended patterns — covers common naming in Spanish-language universities
 _CALENDAR_PATTERNS = [
@@ -68,15 +68,17 @@ def parse_calendar_units(pdf_path: Path, model: str) -> list[dict]:
 
     prompt = (
         "Analiza este documento de calendarización de un curso universitario. "
-        "Identifica las UNIDADES o MÓDULOS principales (agrupa semanas por tema, no listes cada semana). "
+        "Identifica TODAS las UNIDADES o MÓDULOS principales, de principio a fin del semestre "
+        "(agrupa semanas por tema, no listes cada semana). NO omitas ninguna unidad, "
+        "incluidas las últimas del documento. "
         "Responde ÚNICAMENTE con JSON, sin texto adicional:\n"
         '[{"name": "Unidad 1 — Nombre", "topics": ["tema a", "tema b"]}, ...]\n\n'
-        f"Documento (primeras 5000 palabras):\n{text[:5000]}"
+        f"Documento completo:\n{text[:12000]}"
     )
 
     try:
-        resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-        result = _extract_json_list(resp["message"]["content"])
+        content = llm.complete([{"role": "user", "content": prompt}], temperature=0.2)
+        result = _extract_json_list(content)
         if result and isinstance(result, list):
             return [u for u in result if isinstance(u, dict) and "name" in u]
     except Exception:
@@ -105,8 +107,8 @@ def infer_units_from_filenames(course_dir: Path, model: str) -> list[dict]:
     )
 
     try:
-        resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-        result = _extract_json_list(resp["message"]["content"])
+        content = llm.complete([{"role": "user", "content": prompt}], temperature=0.2)
+        result = _extract_json_list(content)
         if result and isinstance(result, list):
             return [u for u in result if isinstance(u, dict) and "name" in u]
     except Exception:
@@ -134,8 +136,8 @@ def _classify_batch(
     )
 
     try:
-        resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-        raw = _extract_json_object(resp["message"]["content"])
+        content = llm.complete([{"role": "user", "content": prompt}], temperature=0.2)
+        raw = _extract_json_object(content)
         if not raw:
             return {}
         result: dict[str, str | None] = {}
@@ -149,6 +151,20 @@ def _classify_batch(
         return result
     except Exception:
         return {}
+
+
+def detect_units(course_dir: Path, model: str = "") -> list[dict]:
+    """Solo la LISTA de unidades (rápido), priorizando la calendarización.
+
+    No clasifica archivos (eso lo hace build_unit_map en el ingest). Pensado para
+    llamarse al seleccionar un curso: leer la calendarización → unidades → preguntar.
+    """
+    calendar_file = find_calendar_file(course_dir)
+    if calendar_file:
+        units = parse_calendar_units(calendar_file, model)
+        if units:
+            return units
+    return infer_units_from_filenames(course_dir, model)
 
 
 def build_unit_map(course_dir: Path, model: str) -> dict:

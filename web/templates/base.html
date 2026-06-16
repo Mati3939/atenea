@@ -16,12 +16,12 @@
           href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
   </noscript>
 
-  <!-- KaTeX: CSS sync (needed before render), JS deferred (non-blocking) -->
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  <!-- KaTeX + marked: servidos localmente (funciona sin internet) -->
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+  <script defer src="/static/vendor/katex/katex.min.js"></script>
+  <script defer src="/static/vendor/katex/contrib/auto-render.min.js"
           onload="if(window._pendingMathRender){window._pendingMathRender();}"></script>
+  <script src="/static/vendor/marked.min.js"></script>
 
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -38,8 +38,14 @@
       <a href="/"         class="nav-link {% if active_page == 'chat'     %}active{% endif %}">
         <span class="nav-icon">💬</span> Chat
       </a>
-      <a href="/analysis" class="nav-link {% if active_page == 'analysis' %}active{% endif %}">
-        <span class="nav-icon">📊</span> Análisis
+      <a href="/organizacion" class="nav-link {% if active_page == 'organizacion' %}active{% endif %}">
+        <span class="nav-icon">📅</span> Organización
+      </a>
+      <a href="/metodos" class="nav-link {% if active_page == 'metodos' %}active{% endif %}">
+        <span class="nav-icon">🧠</span> Métodos de estudio
+      </a>
+      <a href="/demo" class="nav-link {% if active_page == 'demo' %}active{% endif %}">
+        <span class="nav-icon">🎬</span> Modo Demo
       </a>
     </nav>
   </aside>
