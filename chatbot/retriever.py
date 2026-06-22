@@ -44,11 +44,21 @@ class Retriever:
     def get_context_for_unit(
         self, query: str, collection_name: str, unit_name: str, n: int = 3
     ) -> tuple[str, list[dict]]:
-        """Retrieve context filtered by unit name. Falls back to full collection if no results."""
-        results = self.store.query_by_unit(collection_name, query, unit_name, n_results=n * 2)
-        if not results:
-            results = self.store.query(collection_name, query, n_results=n * 2)
-        return _build(_filter_solutions(results), n)
+        """Contexto priorizando la unidad activa; completa con material general si la
+        unidad tiene poco indexado.
+
+        `query_by_unit` y `query` usan el MISMO texto de query, así que el embedding se
+        calcula una sola vez (cache en VectorStore); la segunda búsqueda solo cuesta el
+        lookup vectorial local (sin round-trip a Ollama)."""
+        unit_res = _filter_solutions(
+            self.store.query_by_unit(collection_name, query, unit_name, n_results=n * 2))
+        if len(unit_res) >= n:
+            return _build(unit_res, n)
+        # Unidad escasa (o sin metadata 'unit'): completar con material general del curso.
+        general = _filter_solutions(self.store.query(collection_name, query, n_results=n * 2))
+        seen = {r["text"] for r in unit_res}
+        merged = unit_res + [r for r in general if r["text"] not in seen]
+        return _build(merged, n)
 
     def get_context_all(self, query: str, n_per_collection: int = 1) -> tuple[str, list[dict]]:
         """Busca en todas las colecciones (acotado a ~4 fragmentos por tokens)."""

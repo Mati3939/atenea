@@ -56,6 +56,23 @@ _CORRECT_INDICATORS = [
 ]
 
 
+# ── Inyección de prompt (patrones claros de override) ─────────────────────────
+# Defensa determinista: ante un intento evidente de cambiar el rol/reglas, se
+# responde con un redireccionamiento fijo sin llamar al LLM. El prompt de sistema
+# cubre los casos novedosos; esto garantiza los patrones comunes.
+_INJECTION_RE = re.compile(
+    r"ignora(?:r)?\s+(?:de\s+)?(?:(?:tus|las|mis|estas)\s+)?(?:instrucciones|reglas|lo\s+anterior|el\s+prompt|todo)"
+    r"|olv[íi]da(?:r|te|se)?\s+(?:de\s+)?(?:(?:tus|las|mis)\s+)?(?:instrucciones|reglas|lo\s+anterior|todo\s+lo\s+anterior)"
+    r"|responde\s+(?:solo|s[óo]lo|[úu]nicamente|nada\s+m[áa]s)\s+(?:con|la\s+palabra|el\s+texto|\"|')"
+    r"|\bsystem\s*:|\bnuevas?\s+instrucciones\b|\bdeveloper\s+mode\b",
+    re.IGNORECASE,
+)
+
+
+def _is_injection(text: str) -> bool:
+    return bool(_INJECTION_RE.search(text or ""))
+
+
 def _detect_intent(text: str) -> str:
     if _SOLUTION_RE.search(text):
         return "wants_solution"
@@ -85,20 +102,29 @@ class AteneoChat:
         self.current_exercise: str = ""   # enunciado del último ejercicio planteado
         self.current_topic: str = ""      # tema activo extraído de los mensajes
         self._last_mode: str | None = None  # último modo enviado (estudiar/ejercitar/preguntar)
+        self._method: str | None = None   # método de estudio activo (key de study_methods)
 
     # ── Flujo principal ───────────────────────────────────────────────────────
 
     def chat(self, user_message: str, course: str = None, unit: str = None,
-             difficulty: str = "practicando", mode: str = None) -> dict:
-        intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode)
+             difficulty: str = "practicando", mode: str = None, method: str = None) -> dict:
+        if _is_injection(user_message):
+            return self._injection_reply(user_message)
+        intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode, method)
         raw = llm.complete(messages)
         return self._finalize(user_message, intent, sources, raw)
 
     def chat_stream(self, user_message: str, course: str = None, unit: str = None,
-                    difficulty: str = "practicando", mode: str = None) -> Generator[dict, None, None]:
+                    difficulty: str = "practicando", mode: str = None,
+                    method: str = None) -> Generator[dict, None, None]:
         """Genera eventos {'delta': str} durante el streaming y un evento final
         {'done': True, 'text': str, 'options': list|None} con el texto normalizado."""
-        intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode)
+        if _is_injection(user_message):
+            result = self._injection_reply(user_message)
+            yield {"delta": result["text"]}
+            yield {"done": True, "text": result["text"], "options": result["options"]}
+            return
+        intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode, method)
         raw = ""
         for delta in llm.stream(messages):
             raw += delta
@@ -106,23 +132,51 @@ class AteneoChat:
         result = self._finalize(user_message, intent, sources, raw)
         yield {"done": True, "text": result["text"], "options": result["options"]}
 
+    def _injection_reply(self, user_message: str) -> dict:
+        """Respuesta fija ante un intento de manipulación; no llama al LLM ni cambia el
+        estado del ejercicio, pero registra el turno y ofrece opciones por modo."""
+        text = ("Estoy aquí para ayudarte a estudiar como tu tutora 😊. Sigamos con el "
+                "material del curso: ¿por dónde quieres continuar?")
+        self.history.append({"role": "user", "content": user_message})
+        self.history.append({"role": "assistant", "content": text})
+        options = self._advance_state("answering", False, text)
+        self.session_log.append({
+            "turn": len(self.session_log) + 1, "user": user_message,
+            "sources": [], "assistant": text, "state": self.exercise_state,
+        })
+        return {"text": text, "options": options}
+
     # ── Preparación y cierre de cada turno ───────────────────────────────────
 
     def _prepare(self, user_message: str, course: str | None, unit: str | None,
-                 difficulty: str, mode: str | None):
+                 difficulty: str, mode: str | None, method: str | None = None):
         if mode is not None:
             self._last_mode = mode
+        if method is not None:
+            self._method = method
         intent = _detect_intent(user_message)
-        rag_query = self._rag_query(user_message, intent, unit)
 
-        if unit and course:
-            context, sources = self.retriever.get_context_for_unit(rag_query, course, unit)
-        elif course:
-            context, sources = self.retriever.get_context(rag_query, course)
+        # No se adjunta material crudo en dos situaciones (y de paso se ahorra el embedding):
+        #  1. Al PEDIR un ejercicio: el modelo genera mejor desde el tema y no copia pautas.
+        #  2. Durante un ejercicio ACTIVO (intento / pista / solución): el tutor razona sobre
+        #     el enunciado ya planteado; recuperar más material arriesga ecoar solucionarios
+        #     con matemática rota del PDF (fuga de solución + LaTeX malo).
+        in_active_exercise = self.exercise_state in ("exercise", "guided", "hinted")
+        if intent == "wants_exercise" or in_active_exercise:
+            # Aun así dejamos que _rag_query capture el tema del mensaje (efecto lateral).
+            self._rag_query(user_message, intent, unit)
+            context, sources = "", []
         else:
-            context, sources = self.retriever.get_context_all(rag_query)
+            rag_query = self._rag_query(user_message, intent, unit)
+            if unit and course:
+                context, sources = self.retriever.get_context_for_unit(rag_query, course, unit)
+            elif course:
+                context, sources = self.retriever.get_context(rag_query, course)
+            else:
+                context, sources = self.retriever.get_context_all(rag_query)
 
-        system_prompt = build_system_prompt(self.exercise_state, unit, difficulty, mode)
+        system_prompt = build_system_prompt(self.exercise_state, unit, difficulty,
+                                             mode, self._method)
 
         messages = [{"role": "system", "content": system_prompt}]
         # El material va como referencia de SISTEMA (no como parte del mensaje del
@@ -130,7 +184,7 @@ class AteneoChat:
         # Para ejercicios NO se adjunta: el modelo tiende a copiar las pautas
         # (con soluciones y matemática rota del PDF). Genera mejor ejercicios desde
         # el tema de la unidad, que igual proviene del curso (calendarización).
-        if context and intent != "wants_exercise":
+        if context:
             messages.append({
                 "role": "system",
                 "content": (
@@ -162,6 +216,11 @@ class AteneoChat:
         # el frontend escapa todo de nuevo, así que desescapar aquí es seguro.
         text = html.unescape(text)
         text = normalize_latex(text)
+
+        # Garantía determinista: un enunciado de ejercicio debe invitar a responder.
+        # El modelo a veces omite la pregunta de cierre pedida en el prompt.
+        if intent == "wants_exercise" and "?" not in text:
+            text = text.rstrip() + "\n\n¿Cuál es tu enfoque para resolverlo?"
 
         # Historial limpio: sin contexto RAG ni etiqueta de control
         self.history.append({"role": "user", "content": user_message})
@@ -268,6 +327,7 @@ class AteneoChat:
             "current_exercise": self.current_exercise,
             "current_topic": self.current_topic,
             "last_mode": self._last_mode,
+            "method": self._method,
         }
         path = WEB_SESSIONS_DIR / f"{web_session_id}.json"
         path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
@@ -288,6 +348,7 @@ class AteneoChat:
             obj.current_exercise = state.get("current_exercise", "")
             obj.current_topic = state.get("current_topic", "")
             obj._last_mode = state.get("last_mode", None)
+            obj._method = state.get("method", None)
             return obj
         except Exception:
             return None

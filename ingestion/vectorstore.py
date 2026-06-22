@@ -1,5 +1,6 @@
 import os
 import re
+import functools
 import chromadb
 
 # Modelo de embeddings servido por Ollama. 'paraphrase-multilingual' entiende
@@ -8,18 +9,48 @@ import chromadb
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual"
 
 
+@functools.lru_cache(maxsize=512)
+def _embed_query_cached(model: str, url: str, text: str) -> tuple:
+    """Embebe el texto de una query con Ollama y cachea el resultado.
+
+    Las queries de chat se repiten mucho (quick-replies constantes como "Dame otro
+    ejercicio", repreguntas idénticas), así que cachearlas evita un round-trip a
+    Ollama por turno. Clave: (modelo, url, texto). Devuelve una tupla (hashable)."""
+    import ollama
+    resp = ollama.Client(host=url).embed(model=model, input=text)
+    return tuple(resp["embeddings"][0])
+
+
 class VectorStore:
     def __init__(self, persist_dir: str = "chroma_db"):
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.embedding_model = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip()
+        self._ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
         self._ef = None
         if self.embedding_model and self.embedding_model.lower() != "default":
             from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
             self._ef = OllamaEmbeddingFunction(
-                url=os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+                url=self._ollama_url,
                 model_name=self.embedding_model,
                 timeout=300,  # la primera llamada carga el modelo en frío
             )
+
+    def _query_embedding(self, text: str) -> list | None:
+        """Embedding cacheado de una query (solo con Ollama EF). None → usar query_texts.
+
+        Si algo falla (Ollama caído), devuelve None y la consulta cae al camino con
+        query_texts, que el propio ChromaDB resolverá o degradará a 'sin contexto'."""
+        if self._ef is None:
+            return None
+        try:
+            return [list(_embed_query_cached(self.embedding_model, self._ollama_url, text))]
+        except Exception:
+            return None
+
+    def _query_args(self, query: str) -> dict:
+        """Args para collection.query: embedding cacheado si es posible, si no texto."""
+        emb = self._query_embedding(query)
+        return {"query_embeddings": emb} if emb is not None else {"query_texts": [query]}
 
     def _safe_name(self, name: str) -> str:
         safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)[:63]
@@ -52,6 +83,11 @@ class VectorStore:
             pass
 
     def add_chunks(self, collection_name: str, chunks: list[str], metadata: list[dict]) -> None:
+        # Un nombre vacío/no alfanumérico degeneraría en la colección basura 'col'.
+        if not (collection_name or "").strip() or not re.search(r"[a-zA-Z0-9]", collection_name):
+            raise ValueError(f"Nombre de curso inválido para indexar: {collection_name!r}")
+        if not chunks:
+            return
         collection = self.get_or_create_collection(collection_name)
         base = collection.count()
         ids = [f"chunk_{base + i}" for i in range(len(chunks))]
@@ -65,10 +101,8 @@ class VectorStore:
             count = collection.count()
             if count == 0:
                 return []
-            results = collection.query(
-                query_texts=[query],
-                n_results=min(n_results, count),
-            )
+            qargs = self._query_args(query)
+            results = collection.query(n_results=min(n_results, count), **qargs)
             return [
                 {"text": doc, "metadata": meta}
                 for doc, meta in zip(results["documents"][0], results["metadatas"][0])
@@ -109,9 +143,9 @@ class VectorStore:
             return []
         try:
             results = collection.query(
-                query_texts=[query],
                 n_results=min(n_results, count),
                 where={"unit": unit_name},
+                **self._query_args(query),
             )
             docs = results["documents"][0]
             metas = results["metadatas"][0]
@@ -128,9 +162,9 @@ class VectorStore:
             return []
         try:
             results = collection.query(
-                query_texts=[query],
                 n_results=min(n_results, count),
                 where={"file": file_filter},
+                **self._query_args(query),
             )
             return [
                 {"text": doc, "metadata": meta}

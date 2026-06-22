@@ -9,7 +9,12 @@ store = VectorStore()
 
 def ingest_course(course_dir: Path) -> None:
     course_name = course_dir.name
-    files = [f for f in course_dir.rglob("*") if f.suffix.lower() in SUPPORTED]
+    # Ignorar archivos AppleDouble de macOS ("._foo.pdf") y carpetas __MACOSX que
+    # vienen dentro de ZIPs: no son documentos reales y fallan al parsear.
+    files = [f for f in course_dir.rglob("*")
+             if f.suffix.lower() in SUPPORTED
+             and not f.name.startswith("._")
+             and "__MACOSX" not in f.parts]
 
     if not files:
         print(f"  {course_name}: sin archivos soportados, omitido")

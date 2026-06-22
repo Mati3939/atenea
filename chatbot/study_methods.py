@@ -24,6 +24,11 @@ METHODS = [
             "Si surge una distracción, anótala para después y vuelve al foco.",
         ],
         "best_for": ["cualquier materia", "concentración", "procrastinación", "gestión del tiempo"],
+        "prompt_hint": (
+            "El estudiante usa la Técnica Pomodoro. Estructura la sesión en bloques cortos y "
+            "enfocados: propón objetivos pequeños alcanzables en ~25 min, y de vez en cuando "
+            "sugiérele tomar un descanso de 5 min antes de seguir con el siguiente bloque."
+        ),
     },
     {
         "key": "spaced_repetition",
@@ -46,6 +51,12 @@ METHODS = [
             "Usa Anki o una planilla para gestionar los intervalos automáticamente.",
         ],
         "best_for": ["memorización", "vocabulario", "fórmulas", "definiciones", "idiomas"],
+        "prompt_hint": (
+            "El estudiante usa Repetición espaciada. Ayúdalo a identificar los conceptos clave "
+            "que conviene memorizar y sugiérele convertirlos en tarjetas (una idea por tarjeta). "
+            "Al cerrar cada explicación, recuérdale cuándo repasar de nuevo (hoy, mañana, en 3 días) "
+            "y anímalo a auto-evaluarse en lugar de releer."
+        ),
     },
     {
         "key": "active_recall",
@@ -68,6 +79,12 @@ METHODS = [
             "No releas pasivamente: siempre intenta recordar primero.",
         ],
         "best_for": ["matemáticas", "física", "química", "exámenes con preguntas", "comprensión profunda"],
+        "prompt_hint": (
+            "El estudiante usa Active Recall. ANTES de explicar o mostrar nada, pídele que intente "
+            "recordar o deducir lo que ya sabe del tema. Haz preguntas de recuperación frecuentes "
+            "('¿qué recuerdas sobre…?', '¿cómo abordarías…?') y deja que se esfuerce por recordar "
+            "antes de confirmar. Evita darle todo masticado: prioriza que recupere de memoria."
+        ),
     },
     {
         "key": "feynman",
@@ -91,6 +108,12 @@ METHODS = [
             "Repite hasta poder explicarlo de corrido sin dudar.",
         ],
         "best_for": ["conceptos abstractos", "física", "economía", "filosofía", "programación"],
+        "prompt_hint": (
+            "El estudiante usa la Técnica Feynman. Pídele que TE explique el concepto con palabras "
+            "simples, como a alguien de 12 años. Cuando se trabe o use jerga vacía, ahí está su brecha: "
+            "señálala con una pregunta y guíalo a rellenarla. Tu rol es el de quien escucha la explicación, "
+            "no el de quien la da primero."
+        ),
     },
     {
         "key": "mind_maps",
@@ -113,6 +136,11 @@ METHODS = [
             "Usa el mapa para repasar: cúbrelo y trata de reconstruirlo de memoria.",
         ],
         "best_for": ["cursos con mucho contenido", "historia", "biología", "diseño", "síntesis"],
+        "prompt_hint": (
+            "El estudiante usa Mapas mentales. Presenta los temas mostrando su estructura: concepto "
+            "central, ramas y conexiones entre ideas. Anímalo a dibujar/ampliar su propio mapa tras "
+            "cada explicación y a relacionar el tema nuevo con lo que ya tiene en el mapa."
+        ),
     },
     {
         "key": "cornell",
@@ -136,6 +164,11 @@ METHODS = [
             "Repasa solo cubriendo la columna de notas y respondiendo las preguntas.",
         ],
         "best_for": ["clases magistrales", "lecturas de libros", "derecho", "historia", "toma de notas"],
+        "prompt_hint": (
+            "El estudiante usa el Método Cornell. Ayúdalo a destilar cada tema en preguntas clave y "
+            "un resumen breve con sus palabras. Tras explicar, propón una pregunta que él debería poder "
+            "responder (columna de preguntas) y pídele un resumen de 2-3 frases del bloque visto."
+        ),
     },
     {
         "key": "interleaving",
@@ -159,6 +192,12 @@ METHODS = [
             "Revisa las conexiones entre temas al final de la sesión.",
         ],
         "best_for": ["matemáticas", "física", "química", "problemas mixtos", "preparación de exámenes"],
+        "prompt_hint": (
+            "El estudiante usa Interleaving. NO agotes un solo tipo de problema: alterna entre distintos "
+            "tipos o subtemas de la unidad dentro de la sesión. Al proponer ejercicios, varía el tipo "
+            "respecto al anterior y, de tanto en tanto, mezcla un repaso de algo visto antes para forzar "
+            "la discriminación entre métodos."
+        ),
     },
     {
         "key": "sq3r",
@@ -182,11 +221,22 @@ METHODS = [
             "Repite 'Recite + Review' en sesiones posteriores para consolidar.",
         ],
         "best_for": ["libros de texto", "cursos teóricos", "biología", "historia", "economía"],
+        "prompt_hint": (
+            "El estudiante usa SQ3R (lectura activa). Guíalo por los pasos: primero una inspección general "
+            "del tema, luego convierte títulos en preguntas, lee buscando respuestas, recita de memoria y "
+            "repasa. Antes de explicar a fondo, pídele que formule preguntas sobre el tema y que intente "
+            "responderlas con lo leído."
+        ),
     },
 ]
 
 # Índice rápido por key
 _METHOD_MAP = {m["key"]: m for m in METHODS}
+
+
+def get_method(key: str) -> dict | None:
+    """Devuelve el método por su key, o None si no existe."""
+    return _METHOD_MAP.get((key or "").strip())
 
 
 def recommend(course_labels: list[str]) -> list[str]:

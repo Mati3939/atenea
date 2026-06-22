@@ -234,6 +234,7 @@ def _parse_chat_payload(data: dict):
         "unit":       data.get("unit") or None,
         "difficulty": data.get("difficulty") or "practicando",
         "mode":       data.get("mode") or None,
+        "method":     data.get("method") or None,
     }
 
 
@@ -251,7 +252,7 @@ async def api_chat(request: Request):
     chat_obj = _get_session(p["session_id"])
     try:
         result = chat_obj.chat(p["message"], course=p["course"], unit=p["unit"],
-                               difficulty=p["difficulty"], mode=p["mode"])
+                               difficulty=p["difficulty"], mode=p["mode"], method=p["method"])
         chat_obj.save_session()
         chat_obj.save_state(p["session_id"])
         return {"response": result["text"], "options": result.get("options")}
@@ -270,7 +271,8 @@ async def api_chat_stream(request: Request):
     def gen():
         try:
             for event in chat_obj.chat_stream(p["message"], course=p["course"], unit=p["unit"],
-                                              difficulty=p["difficulty"], mode=p["mode"]):
+                                              difficulty=p["difficulty"], mode=p["mode"],
+                                              method=p["method"]):
                 yield _json.dumps(event, ensure_ascii=False) + "\n"
         except Exception as e:
             yield _json.dumps({"error": str(e)}, ensure_ascii=False) + "\n"
@@ -447,7 +449,7 @@ def _run_fetch_course(canvas_id: int, course_name: str):
     s = _fetch_status[canvas_id]
     failures: list[str] = []
     try:
-        from canvas_api import CanvasClient
+        from canvas_api import CanvasClient, file_dest
         from ingestion.parsers import parse, SUPPORTED
         from ingestion.chunker import chunk
         from ingestion.vectorstore import VectorStore
@@ -462,10 +464,10 @@ def _run_fetch_course(canvas_id: int, course_name: str):
         # Fase 1: Descargar archivos nuevos
         s["phase"] = "Conectando con Canvas..."
         s["percentage"] = 5
-        files = client.get_course_files(canvas_id)
+        files = client.get_all_course_files(canvas_id)
         to_download = [
             f for f in files
-            if not f.get("locked_for_user") and not (course_dir / f["filename"]).exists()
+            if not f.get("locked_for_user") and not file_dest(course_dir, f).exists()
         ]
 
         s["phase"] = f"Descargando {len(to_download)} archivo(s)..."
@@ -475,7 +477,7 @@ def _run_fetch_course(canvas_id: int, course_name: str):
             s["phase"] = f"Descargando {done}/{total} archivo(s)..."
             s["percentage"] = 10 + int(done / max(total, 1) * 35)
 
-        dl_items = [(f["url"], course_dir / f["filename"]) for f in to_download]
+        dl_items = [(f["url"], file_dest(course_dir, f)) for f in to_download]
         for dest, e in client.download_many(dl_items, on_done=_on_dl):
             failures.append(f"{dest.name}: {e}")
 
@@ -498,8 +500,19 @@ def _run_fetch_course(canvas_id: int, course_name: str):
             store.delete_collection(course_name_safe)
 
         all_files = [f for f in course_dir.rglob("*")
-                     if f.suffix.lower() in SUPPORTED and not f.name.startswith("._")]
+                     if f.suffix.lower() in SUPPORTED and not f.name.startswith("._")
+                     and "__MACOSX" not in f.parts]
         to_index  = [f for f in all_files if not store.is_file_indexed(course_name_safe, str(f))]
+
+        # Reusar el mapa archivo→unidad si ya existe (lo crea el ingest masivo). Permite
+        # etiquetar 'unit' en la metadata para que el filtrado por unidad del RAG sea real.
+        file_map = {}
+        units_file = course_dir / "_units.json"
+        if units_file.exists():
+            try:
+                file_map = (_json.loads(units_file.read_text(encoding="utf-8")) or {}).get("file_map", {})
+            except Exception:
+                file_map = {}
 
         s["phase"] = f"Indexando {len(to_index)} documento(s)..."
         s["percentage"] = 55
@@ -511,7 +524,12 @@ def _run_fetch_course(canvas_id: int, course_name: str):
                 text = parse(f)
                 if text.strip():
                     chunks = chunk(text)
-                    meta = [{"course": course_name_safe, "file": f.name, "path": str(f)} for _ in chunks]
+                    unit_name = file_map.get(f.name)
+                    meta = [
+                        {"course": course_name_safe, "file": f.name, "path": str(f),
+                         **({"unit": unit_name} if unit_name else {})}
+                        for _ in chunks
+                    ]
                     store.add_chunks(course_name_safe, chunks, meta)
             except Exception as e:
                 failures.append(f"{f.name}: {e}")
@@ -617,7 +635,7 @@ async def start_sync(background_tasks: BackgroundTasks):
 def _run_sync():
     s = _status["sync"]
     try:
-        from canvas_api import CanvasClient
+        from canvas_api import CanvasClient, file_dest
         client   = CanvasClient(os.environ["CANVAS_URL"], os.environ["CANVAS_TOKEN"])
         data_dir = Path("data")
         data_dir.mkdir(exist_ok=True)
@@ -631,13 +649,13 @@ def _run_sync():
             name = course.get("name", str(course["id"]))
             s["phase"] = f"Comparando: {name}"
             s["percentage"] = int(i / len(courses) * 30)
-            files = client.get_course_files(course["id"])
+            files = client.get_all_course_files(course["id"])
             course_dir = data_dir / _safe_folder(name)
             for f in files:
                 if f.get("locked_for_user"):
                     skipped += 1
                     continue
-                dest = course_dir / f["filename"]
+                dest = file_dest(course_dir, f)
                 if dest.exists():
                     skipped += 1
                 else:
@@ -654,7 +672,7 @@ def _run_sync():
             s["downloaded"] = done
             s["percentage"] = 30 + int(done / max(total, 1) * 50)
 
-        dl_items = [(f["url"], course_dir / f["filename"]) for course_dir, f in to_download]
+        dl_items = [(f["url"], file_dest(course_dir, f)) for course_dir, f in to_download]
         for dest, e in client.download_many(dl_items, on_done=_on_dl):
             failures.append(f"{dest.name}: {e}")
         s["errors"] = len(failures)
@@ -1069,8 +1087,12 @@ async def get_methods():
 
 
 @app.get("/api/methods/recommend")
-async def get_methods_recommend():
+async def get_methods_recommend(course: str = ""):
+    """Métodos recomendados. Con ?course=<nombre> recomienda para ese ramo en concreto;
+    sin parámetro, agrega sobre todos los ramos académicos descargados."""
     from chatbot.study_methods import recommend
+    if course.strip():
+        return {"recommended": recommend([course.strip()])}
     data_dir = Path("data")
     labels: list[str] = []
     if data_dir.exists():

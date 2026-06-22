@@ -15,6 +15,9 @@ let _activeUnit       = null;
 let _activeDifficulty = 'practicando';
 let _canvasCourses    = [];         // [{canvas_id, label, safe_name, indexed}]
 let _selectedMode     = null;       // 'estudiar' | 'ejercitar' | 'preguntar'
+let _selectedMethod   = null;       // key de método de estudio; '__none__' = decidido sin método
+let _methodLabel      = null;       // nombre legible del método activo (para badge/intro)
+let _allMethods       = null;       // cache de GET /api/methods
 let _transcript         = [];         // [{role, text}] para repintar al recargar
 let _lastOptions        = null;
 let _recording          = true;       // off durante el repintado
@@ -168,6 +171,8 @@ function _persistState() {
       courseLabel: _activeCourseLabel,
       unit: _activeUnit,
       mode: _selectedMode,
+      method: _selectedMethod,
+      methodLabel: _methodLabel,
       difficulty: _activeDifficulty,
       options: _lastOptions,
     }));
@@ -183,6 +188,8 @@ function _restoreState() {
   _activeCourseLabel = saved.courseLabel;
   _activeUnit        = saved.unit || null;
   _selectedMode      = saved.mode || null;
+  _selectedMethod    = saved.method || null;
+  _methodLabel       = saved.methodLabel || null;
   _activeDifficulty  = saved.difficulty || 'practicando';
   _transcript        = saved.transcript;
   _lastOptions       = saved.options || null;
@@ -204,7 +211,9 @@ function _restoreState() {
 function _updateBadge() {
   if (!badgeEl) return;
   if (_activeCourseLabel) {
-    badgeEl.textContent = _activeUnit ? `${_activeCourseLabel} · ${_activeUnit}` : _activeCourseLabel;
+    let txt = _activeUnit ? `${_activeCourseLabel} · ${_activeUnit}` : _activeCourseLabel;
+    if (_methodLabel) txt += ` · 🧠 ${_methodLabel}`;
+    badgeEl.textContent = txt;
     badgeEl.classList.add('visible');
   } else {
     badgeEl.textContent = '';
@@ -219,6 +228,8 @@ function showGreeting() {
   _activeCourseLabel = null;
   _activeUnit   = null;
   _selectedMode = null;
+  _selectedMethod = null;
+  _methodLabel  = null;
   _transcript   = [];
   _lastOptions  = null;
   messagesEl.innerHTML = '';
@@ -417,7 +428,59 @@ async function _handleUploadMaterial(course, onDone) {
   });
 }
 
+// ── Método de estudio (recomendar + elegir antes de empezar) ───────────────────
+async function _loadMethods() {
+  if (_allMethods) return _allMethods;
+  try {
+    const d = await fetch('/api/methods').then(r => r.json());
+    _allMethods = d.methods || [];
+  } catch { _allMethods = []; }
+  return _allMethods;
+}
+
+async function _chooseMethod() {
+  let rec = null;
+  try {
+    const d = await fetch(`/api/methods/recommend?course=${encodeURIComponent(_activeCourseLabel || '')}`)
+      .then(r => r.json());
+    rec = (d.recommended && d.recommended[0]) || null;
+  } catch {}
+
+  const methods = await _loadMethods();
+  const m = rec ? methods.find(x => x.key === rec) : null;
+  if (!m) { _selectedMethod = '__none__'; _startChatting(); return; }
+
+  appendMessage('assistant', `🧠 Para **${_activeCourseLabel}** te recomiendo **${m.name}** ${m.emoji || ''}: ${m.short}`);
+  appendOptions([`Usar ${m.name}`, 'Elegir otro método'], opt => {
+    appendMessage('user', opt);
+    if (opt === 'Elegir otro método') {
+      _showMethodPicker(methods);
+    } else {
+      _selectedMethod = m.key;
+      _methodLabel    = m.name;
+      _startChatting();
+    }
+  });
+}
+
+function _showMethodPicker(methods) {
+  appendMessage('assistant', '¿Con qué método quieres estudiar?');
+  appendOptions(
+    methods.map(m => `${m.emoji || ''} ${m.name}`.trim()),
+    label => {
+      const m = methods.find(x => label.includes(x.name));
+      appendMessage('user', label);
+      _selectedMethod = m ? m.key : '__none__';
+      _methodLabel    = m ? m.name : null;
+      _startChatting();
+    }
+  );
+}
+
 function _startChatting() {
+  // Antes de empezar, elegir el método de estudio (recomendado + cambiable).
+  if (!_selectedMethod) { _chooseMethod(); return; }
+
   _flowState = 'chatting';
   _updateBadge();
   _setInputEnabled(true);
@@ -426,7 +489,8 @@ function _startChatting() {
     : _selectedMode === 'ejercitar' ? 'practicar ejercicios en'
     : 'resolver dudas sobre';
 
-  appendMessage('assistant', `¡Listo! Estamos para ${modeVerb} **${_activeCourseLabel}**${_activeUnit ? ` (${_activeUnit})` : ''}. ¿Por dónde empezamos?`);
+  const methodNote = _methodLabel ? ` Usaremos **${_methodLabel}** como método de estudio.` : '';
+  appendMessage('assistant', `¡Listo! Estamos para ${modeVerb} **${_activeCourseLabel}**${_activeUnit ? ` (${_activeUnit})` : ''}.${methodNote} ¿Por dónde empezamos?`);
 
   if (_selectedMode === 'ejercitar') {
     appendOptions(['Dame un ejercicio', 'Quiero el ejercicio más difícil']);
@@ -501,6 +565,7 @@ function _chatPayload(text) {
     unit:       _activeUnit,
     difficulty: _activeDifficulty,
     mode:       _selectedMode,
+    method:     (_selectedMethod && _selectedMethod !== '__none__') ? _selectedMethod : null,
   });
 }
 
