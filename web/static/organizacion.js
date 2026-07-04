@@ -47,6 +47,7 @@ let _curMonth = new Date().getMonth(); // 0-indexed
 let _canvasEvents  = [];   // [{name, due_at, course, url, points}]
 let _userEvents    = [];   // [{id, date, title, type, syllabus}]
 let _pendingDate   = null; // date string "YYYY-MM-DD" for modal
+let _highlightDate = null; // date string recién agendado por NL (resalte temporal)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function _isoDate(date) {
@@ -109,13 +110,14 @@ function renderCalendar() {
     const d = _canvasDate(ev.due_at);
     if (!d) return;
     if (!evByDate[d]) evByDate[d] = [];
-    evByDate[d].push({ label: ev.name, type: 'canvas' });
+    evByDate[d].push({ label: ev.name, type: 'canvas', ref: ev });
   });
   _userEvents.forEach(ev => {
     const d = ev.date;
     if (!d) return;
     if (!evByDate[d]) evByDate[d] = [];
-    evByDate[d].push({ label: ev.title, type: 'user' });
+    const cls = ev.type === 'estudio' ? 'estudio' : 'user';
+    evByDate[d].push({ label: ev.title, type: cls, ref: ev });
   });
 
   const totalCells = Math.ceil((startOffset + daysInMonth) / 7) * 7;
@@ -142,7 +144,8 @@ function renderCalendar() {
 
     cell.className = 'cal-cell' +
       (otherMonth ? ' other-month' : '') +
-      (dateStr === today ? ' today' : '');
+      (dateStr === today ? ' today' : '') +
+      (dateStr === _highlightDate ? ' nl-highlight' : '');
 
     cell.innerHTML = `<span class="cal-day">${dayNum}</span><span class="cal-plus">+</span>`;
 
@@ -153,6 +156,10 @@ function renderCalendar() {
       span.className = `cal-event ${ev.type}`;
       span.title = ev.label;
       span.textContent = ev.label;
+      span.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDetailModal(ev.ref, ev.type);
+      });
       cell.appendChild(span);
     });
     if (evs.length > 3) {
@@ -332,5 +339,159 @@ async function generatePlan() {
   }
 }
 
+// ── Detalle / edición de evento ────────────────────────────────────────────────
+let _detailEvent = null;  // objeto del evento (usuario o canvas) actualmente abierto
+let _detailType  = null;  // 'canvas' | 'user' | 'estudio'
+
+function openDetailModal(ev, type) {
+  _detailEvent = ev;
+  _detailType  = type;
+  const readonly = type === 'canvas';
+
+  document.getElementById('detail-title-head').textContent =
+    readonly ? '📌 Evento de Canvas' : (type === 'estudio' ? '📖 Día de estudio' : '📌 Evento');
+
+  const titleEl = document.getElementById('detail-title');
+  titleEl.value = readonly ? (ev.name || '') : (ev.title || '');
+  titleEl.disabled = readonly;
+
+  const dateEl = document.getElementById('detail-date');
+  dateEl.value = readonly ? (_canvasDate(ev.due_at) || '') : (ev.date || '');
+  dateEl.disabled = readonly;
+
+  const notesField = document.getElementById('detail-notes-field');
+  const notesEl    = document.getElementById('detail-notes');
+  const notes = readonly ? '' : (ev.syllabus || '');
+  if (notes) {
+    notesField.style.display = 'flex';
+    _renderInto(notesEl, notes);
+  } else {
+    notesField.style.display = 'none';
+  }
+
+  document.getElementById('detail-readonly-note').style.display = readonly ? 'block' : 'none';
+  document.getElementById('detail-save-btn').style.display = readonly ? 'none' : 'inline-flex';
+  document.getElementById('detail-del-btn').style.display  = readonly ? 'none' : 'inline-flex';
+  document.getElementById('detail-del-plan').style.display =
+    (!readonly && ev.plan_group) ? 'inline-flex' : 'none';
+
+  document.getElementById('detail-modal').style.display = 'flex';
+}
+
+function closeDetailModal() {
+  document.getElementById('detail-modal').style.display = 'none';
+  _detailEvent = null;
+  _detailType  = null;
+}
+
+async function saveDetailEvent() {
+  if (!_detailEvent || _detailType === 'canvas') return;
+  const title = document.getElementById('detail-title').value.trim();
+  const date  = document.getElementById('detail-date').value;
+  if (!title || !date) { alert('El nombre y la fecha son obligatorios.'); return; }
+
+  try {
+    const res = await fetch(`/api/events/${_detailEvent.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, date }),
+    });
+    if (!res.ok) throw new Error();
+    const updated = await res.json();
+    const idx = _userEvents.findIndex(e => e.id === updated.id);
+    if (idx >= 0) _userEvents[idx] = updated;
+    closeDetailModal();
+    renderCalendar();
+  } catch {
+    alert('No se pudo guardar el evento.');
+  }
+}
+
+async function deleteDetailEvent() {
+  if (!_detailEvent || _detailType === 'canvas') return;
+  try {
+    await fetch(`/api/events/${_detailEvent.id}`, { method: 'DELETE' });
+    _userEvents = _userEvents.filter(e => e.id !== _detailEvent.id);
+    closeDetailModal();
+    renderCalendar();
+  } catch {
+    alert('No se pudo eliminar el evento.');
+  }
+}
+
+async function deleteDetailPlanGroup() {
+  if (!_detailEvent || !_detailEvent.plan_group) return;
+  if (!confirm('¿Eliminar todos los días de este plan de estudio?')) return;
+  const group = _detailEvent.plan_group;
+  try {
+    await fetch(`/api/events/plan/${group}`, { method: 'DELETE' });
+    _userEvents = _userEvents.filter(e => e.plan_group !== group);
+    closeDetailModal();
+    renderCalendar();
+  } catch {
+    alert('No se pudo eliminar el plan.');
+  }
+}
+
+// ── Agenda por lenguaje natural ─────────────────────────────────────────────────
+async function submitNL(prefillText) {
+  const input = document.getElementById('nl-input');
+  const text  = (prefillText !== undefined ? prefillText : input.value).trim();
+  if (!text) return;
+  input.value = text;
+
+  const btn    = document.getElementById('nl-btn');
+  const status = document.getElementById('nl-status');
+  btn.disabled = true;
+  input.disabled = true;
+  status.style.display = 'block';
+  status.innerHTML = '<span class="muted">🪄 Atenea está organizando tu plan…</span>';
+
+  try {
+    const res = await fetch('/api/agenda/nl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      status.innerHTML = `<span style="color:#ef4444">⚠️ ${_esc(data.error || 'No pude interpretar el mensaje.')}</span>`;
+    } else {
+      status.innerHTML = `<span style="color:#15803d">${_esc(data.resumen || 'Listo.')}</span>`;
+      input.value = '';
+      await loadCalendarData();
+      if (data.event && data.event.date) {
+        const d = new Date(data.event.date);
+        if (!isNaN(d)) { _curYear = d.getFullYear(); _curMonth = d.getMonth(); }
+        _highlightDate = data.event.date;
+        setTimeout(() => { _highlightDate = null; renderCalendar(); }, 5000);
+      }
+      renderCalendar();
+    }
+  } catch {
+    status.innerHTML = '<span style="color:#ef4444">⚠️ No pude conectar con el servidor.</span>';
+  } finally {
+    btn.disabled = false;
+    input.disabled = false;
+  }
+}
+
+document.getElementById('nl-input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitNL(); }
+});
+
+// Si llegamos con ?text=... (desde el chatbot principal), prellenar y ejecutar.
+function _consumeNLFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const text = params.get('text');
+  if (!text) return;
+  document.getElementById('nl-input').value = text;
+  submitNL(text);
+  const url = new URL(window.location.href);
+  url.searchParams.delete('text');
+  window.history.replaceState({}, '', url.toString());
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 loadCalendar();
+_consumeNLFromQuery();

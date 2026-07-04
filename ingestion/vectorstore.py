@@ -82,6 +82,12 @@ class VectorStore:
         except Exception:
             pass
 
+    def drop_collection(self, course: str) -> None:
+        """Alias de `delete_collection`, tolerante a colección inexistente.
+        Se usa al borrar un curso completo desde el gestor de archivos: si el
+        curso nunca se indexó (o ya se había borrado), simplemente no hace nada."""
+        self.delete_collection(course)
+
     def add_chunks(self, collection_name: str, chunks: list[str], metadata: list[dict]) -> None:
         # Un nombre vacío/no alfanumérico degeneraría en la colección basura 'col'.
         if not (collection_name or "").strip() or not re.search(r"[a-zA-Z0-9]", collection_name):
@@ -117,6 +123,46 @@ class VectorStore:
             return len(result["ids"]) > 0
         except Exception:
             return False
+
+    def update_chunk_paths(self, collection_name: str, pairs: list[tuple[str, str, str | None]]) -> int:
+        """Corrige in-place la metadata (path/file/unit) de chunks ya indexados
+        cuyo archivo físico se movió (p. ej. tras 'Ordenar curso' en el gestor de
+        archivos). No re-embebe ni llama al LLM — es una corrección de metadata,
+        mucho más barata y sin duplicar contenido en la colección.
+
+        `pairs`: lista de (old_abs_path, new_abs_path, new_unit_o_None). Devuelve
+        cuántos chunks se actualizaron."""
+        try:
+            col = self.client.get_collection(self._safe_name(collection_name))
+        except Exception:
+            return 0
+        updated = 0
+        for old_path, new_path, new_unit in pairs:
+            try:
+                result = col.get(where={"path": old_path}, include=["metadatas"])
+            except Exception:
+                continue
+            ids = result.get("ids") or []
+            if not ids:
+                continue
+            metas = result.get("metadatas") or []
+            new_name = os.path.basename(new_path)
+            new_metas = []
+            for m in metas:
+                m = dict(m or {})
+                m["path"] = new_path
+                m["file"] = new_name
+                if new_unit:
+                    m["unit"] = new_unit
+                else:
+                    m.pop("unit", None)
+                new_metas.append(m)
+            try:
+                col.update(ids=ids, metadatas=new_metas)
+                updated += len(ids)
+            except Exception:
+                continue
+        return updated
 
     def list_collections(self) -> list[str]:
         return [c.name for c in self.client.list_collections()]

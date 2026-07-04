@@ -5,12 +5,16 @@ import time
 import uuid
 import zipfile
 import threading
+import hashlib
+import shutil
+import mimetypes
+import requests
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, FileResponse
 from typing import List
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,6 +34,26 @@ def _safe_name(name: str) -> str:
 
 def _safe_folder(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
+
+
+def _find_course_dir(course_safe: str) -> Path | None:
+    """Busca la carpeta de curso en data/: primero por coincidencia exacta de
+    nombre de carpeta (así el gestor de archivos puede pasar el nombre real
+    directamente), y si no, por _safe_name (así el chat, que usa safe_name,
+    también funciona)."""
+    data_dir = Path("data")
+    if not data_dir.exists() or not course_safe:
+        return None
+    # Nunca tratar course_safe como ruta compuesta (evita escapar de data/).
+    if "/" in course_safe or "\\" in course_safe or ".." in course_safe:
+        return None
+    exact = data_dir / course_safe
+    if exact.is_dir():
+        return exact
+    for d in data_dir.iterdir():
+        if d.is_dir() and _safe_name(d.name) == course_safe:
+            return d
+    return None
 
 
 # Cursos de Canvas que NO son ramos académicos (institucionales, genéricos, programas).
@@ -57,6 +81,73 @@ def _is_academic_course(course: dict) -> bool:
 def _get_store():
     from ingestion.vectorstore import VectorStore
     return VectorStore()
+
+
+# ── Login / auth (single-user, sesión vía cookie) ───────────────────────────────
+
+_AUTH_COOKIE = "atenea_auth"
+_ENV_PATH = Path(".env")
+_GATED_PATHS = {"/", "/chat", "/organizacion", "/metodos", "/dashboard", "/archivos"}
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()[:32]
+
+
+def _is_authed(request: Request) -> bool:
+    token = os.environ.get("CANVAS_TOKEN", "").strip()
+    if not token:
+        return False
+    cookie_val = request.cookies.get(_AUTH_COOKIE, "")
+    return bool(cookie_val) and cookie_val == _token_hash(token)
+
+
+def _write_env_keys(updates: dict) -> None:
+    """Actualiza/crea claves en .env preservando el resto de líneas y comentarios."""
+    lines: list[str] = []
+    if _ENV_PATH.exists():
+        lines = _ENV_PATH.read_text(encoding="utf-8").splitlines()
+
+    seen: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}")
+                seen.add(key)
+                continue
+        new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in seen:
+            new_lines.append(f"{key}={value}")
+
+    _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    for key, value in updates.items():
+        os.environ[key] = value
+
+
+def _validate_canvas_token(canvas_url: str, token: str) -> dict:
+    """Valida el token contra Canvas. Devuelve {'ok':True,'name':...} o {'ok':False,'error':...}."""
+    if not canvas_url or not token:
+        return {"ok": False, "error": "Falta la URL de Canvas o el token."}
+    url = canvas_url.rstrip("/") + "/api/v1/users/self"
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+    except requests.RequestException:
+        return {"ok": False, "error": "No se pudo conectar con Canvas. Verifica la URL."}
+    if r.status_code == 401:
+        return {"ok": False, "error": "Token inválido o expirado."}
+    if not r.ok:
+        return {"ok": False, "error": f"Canvas respondió con un error ({r.status_code})."}
+    try:
+        data = r.json()
+    except Exception:
+        return {"ok": False, "error": "Respuesta inesperada de Canvas."}
+    name = data.get("name") or data.get("short_name") or "Usuario"
+    return {"ok": True, "name": name}
 
 
 # ── Ollama warmup (loads models into RAM so first prompt is faster) ────────────
@@ -133,6 +224,92 @@ chat_sessions: dict = {}
 
 _fetch_status: dict[int, dict] = {}  # canvas_id → status
 
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    """Exige sesión (cookie atenea_auth) para las páginas HTML principales.
+    /demo, /login y /api/* (además de /static) quedan siempre accesibles."""
+    if request.method == "GET" and request.url.path in _GATED_PATHS and not _is_authed(request):
+        return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+
+# ── Login / onboarding ───────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    canvas_url = os.environ.get("CANVAS_URL", "").strip() or "https://udd.instructure.com"
+    configured = bool(os.environ.get("CANVAS_TOKEN", "").strip())
+    return templates.TemplateResponse(request, "login.html", {
+        "canvas_url": canvas_url,
+        "configured": configured,
+    })
+
+
+@app.get("/api/login/status")
+async def api_login_status():
+    token = os.environ.get("CANVAS_TOKEN", "").strip()
+    canvas_url = os.environ.get("CANVAS_URL", "").strip()
+    if not token or not canvas_url:
+        return {"configured": False, "name": None}
+    result = _validate_canvas_token(canvas_url, token)
+    if result.get("ok"):
+        return {"configured": True, "name": result["name"]}
+    return {"configured": False, "name": None}
+
+
+@app.post("/api/login")
+async def api_login(request: Request):
+    data = await request.json()
+    use_existing = bool(data.get("use_existing"))
+
+    if use_existing:
+        canvas_url = os.environ.get("CANVAS_URL", "").strip()
+        token = os.environ.get("CANVAS_TOKEN", "").strip()
+        if not token or not canvas_url:
+            return JSONResponse(
+                {"ok": False, "error": "No hay una sesión previa configurada."}, status_code=400
+            )
+    else:
+        canvas_url = (data.get("canvas_url") or "").strip().rstrip("/")
+        token = (data.get("token") or "").strip()
+        if not canvas_url or not token:
+            return JSONResponse(
+                {"ok": False, "error": "Completa la URL de Canvas y el token."}, status_code=400
+            )
+
+    result = _validate_canvas_token(canvas_url, token)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=401)
+
+    if not use_existing:
+        _write_env_keys({"CANVAS_URL": canvas_url, "CANVAS_TOKEN": token})
+
+    resp = JSONResponse({"ok": True, "name": result["name"]})
+    resp.set_cookie(
+        key=_AUTH_COOKIE,
+        value=_token_hash(token),
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
+    )
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_AUTH_COOKIE)
+    return resp
+
+
+@app.get("/logout")
+async def logout_redirect():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(_AUTH_COOKIE)
+    return resp
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -145,6 +322,13 @@ async def home(request: Request):
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     return RedirectResponse("/")
+
+
+@app.get("/archivos", response_class=HTMLResponse)
+async def archivos_page(request: Request):
+    return templates.TemplateResponse(request, "archivos.html", {
+        "active_page": "archivos",
+    })
 
 
 @app.get("/organizacion", response_class=HTMLResponse)
@@ -255,7 +439,10 @@ async def api_chat(request: Request):
                                difficulty=p["difficulty"], mode=p["mode"], method=p["method"])
         chat_obj.save_session()
         chat_obj.save_state(p["session_id"])
-        return {"response": result["text"], "options": result.get("options")}
+        return {
+            "response": result["text"], "options": result.get("options"),
+            "degraded": result.get("degraded", False), "provider": result.get("provider"),
+        }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -270,6 +457,10 @@ async def api_chat_stream(request: Request):
 
     def gen():
         try:
+            # chat_stream() ya incluye degraded/provider en el evento "done"
+            # (calculados en conversation.py inmediatamente tras llm.stream(),
+            # en el mismo hilo — así no dependemos de una consulta aparte a
+            # llm.last_served() que podría leer un valor de otro turno).
             for event in chat_obj.chat_stream(p["message"], course=p["course"], unit=p["unit"],
                                               difficulty=p["difficulty"], mode=p["mode"],
                                               method=p["method"]):
@@ -295,6 +486,171 @@ async def clear_session(session_id: str):
         del chat_sessions[session_id]
     AteneoChat.delete_state(session_id)
     return {"cleared": True}
+
+
+# ── Chat sessions history API ────────────────────────────────────────────────
+# Cada turno de chat persiste su estado completo en logs/web_sessions/<sid>.json
+# (AteneoChat.save_state); estos endpoints exponen ese historial agrupado por
+# curso para la UI (botón "Historial" en el chat).
+
+_SESSIONS_DIR = Path("logs") / "web_sessions"
+SESSIONS_MAX_PER_COURSE = 20
+
+
+def _safe_name_to_label_map() -> dict[str, str]:
+    """safe_name (el valor de 'course' que usa el chat) -> nombre legible de carpeta."""
+    mapping: dict[str, str] = {}
+    data_dir = Path("data")
+    if data_dir.exists():
+        for d in data_dir.iterdir():
+            if d.is_dir():
+                mapping[_safe_name(d.name)] = d.name
+    return mapping
+
+
+def _read_session_file(path: Path) -> dict | None:
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _session_title(data: dict, transcript: list, unit: str | None) -> str:
+    custom = (data.get("title") or "").strip()
+    if custom:
+        return custom
+    first_user = next((t.get("text", "") for t in transcript if t.get("role") == "user"), "")
+    first_user = (first_user or "").strip()
+    if first_user:
+        return first_user[:60] + ("…" if len(first_user) > 60 else "")
+    if unit:
+        return unit
+    return "Sesión sin título"
+
+
+def _session_summary(sid: str, data: dict, label_map: dict[str, str]) -> dict | None:
+    """None si el archivo no tiene forma de sesión mostrable (formato viejo/de
+    prueba sin curso NI transcript, p. ej. verif_*.json)."""
+    transcript = data.get("transcript") or []
+    course = data.get("course") or None
+    if not course and not transcript:
+        return None
+
+    unit = data.get("unit") or None
+    return {
+        "sid": sid,
+        "course": course,
+        "course_label": (label_map.get(course, course) if course else None),
+        "unit": unit,
+        "method": data.get("method") or None,
+        "mode": data.get("last_mode") or None,
+        "updated_at": data.get("updated_at") or "",
+        "title": _session_title(data, transcript, unit),
+        "n_messages": len(transcript),
+    }
+
+
+def _session_sort_key(item: dict) -> datetime:
+    try:
+        return datetime.fromisoformat(item["updated_at"])
+    except Exception:
+        return datetime.min
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """Historial de sesiones de chat. Ignora archivos que no parseen o que no
+    tengan curso NI transcript (sesiones de formatos anteriores/de prueba).
+    Poda a SESSIONS_MAX_PER_COURSE las sesiones más antiguas de cada curso
+    (las sesiones sin curso no se podan)."""
+    if not _SESSIONS_DIR.exists():
+        return {"sessions": []}
+
+    label_map = _safe_name_to_label_map()
+    items: list[dict] = []
+    for path in _SESSIONS_DIR.glob("*.json"):
+        data = _read_session_file(path)
+        if data is None:
+            continue
+        summary = _session_summary(path.stem, data, label_map)
+        if summary is not None:
+            items.append(summary)
+
+    items.sort(key=_session_sort_key, reverse=True)
+
+    by_course: dict[str, list[dict]] = {}
+    for it in items:
+        if it["course"]:
+            by_course.setdefault(it["course"], []).append(it)
+
+    to_remove: set[str] = set()
+    for group in by_course.values():
+        for it in group[SESSIONS_MAX_PER_COURSE:]:
+            to_remove.add(it["sid"])
+
+    if to_remove:
+        from chatbot.conversation import AteneoChat
+        for sid in to_remove:
+            AteneoChat.delete_state(sid)
+            chat_sessions.pop(sid, None)
+        items = [it for it in items if it["sid"] not in to_remove]
+
+    return {"sessions": items}
+
+
+@app.get("/api/sessions/{sid}")
+async def get_session_detail(sid: str):
+    sid = _safe_session_id(sid)
+    data = _read_session_file(_SESSIONS_DIR / f"{sid}.json")
+    if data is None:
+        return JSONResponse({"error": "Sesión no encontrada"}, status_code=404)
+
+    label_map = _safe_name_to_label_map()
+    course = data.get("course") or None
+    return {
+        "sid": sid,
+        "course": course,
+        "course_label": (label_map.get(course, course) if course else None),
+        "unit": data.get("unit") or None,
+        "method": data.get("method") or None,
+        "mode": data.get("last_mode") or None,
+        "transcript": data.get("transcript", []),
+        "options": data.get("options"),
+    }
+
+
+@app.delete("/api/sessions/{sid}")
+async def delete_session(sid: str):
+    from chatbot.conversation import AteneoChat
+    sid = _safe_session_id(sid)
+    path = _SESSIONS_DIR / f"{sid}.json"
+    if not path.exists():
+        return JSONResponse({"error": "Sesión no encontrada"}, status_code=404)
+    AteneoChat.delete_state(sid)
+    chat_sessions.pop(sid, None)
+    return {"deleted": True}
+
+
+@app.put("/api/sessions/{sid}")
+async def rename_session(sid: str, request: Request):
+    sid = _safe_session_id(sid)
+    path = _SESSIONS_DIR / f"{sid}.json"
+    data = _read_session_file(path)
+    if data is None:
+        return JSONResponse({"error": "Sesión no encontrada"}, status_code=404)
+
+    body = await request.json()
+    title = str(body.get("title") or "").strip()
+    if not title:
+        return JSONResponse({"error": "Título vacío"}, status_code=400)
+
+    data["title"] = title[:120]
+    try:
+        path.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"ok": True, "title": data["title"]}
 
 
 # ── Canvas courses API ────────────────────────────────────────────────────────
@@ -524,7 +880,11 @@ def _run_fetch_course(canvas_id: int, course_name: str):
                 text = parse(f)
                 if text.strip():
                     chunks = chunk(text)
-                    unit_name = file_map.get(f.name)
+                    try:
+                        relpath = str(f.relative_to(course_dir)).replace("\\", "/")
+                    except ValueError:
+                        relpath = f.name
+                    unit_name = file_map.get(relpath) or file_map.get(f.name)
                     meta = [
                         {"course": course_name_safe, "file": f.name, "path": str(f),
                          **({"unit": unit_name} if unit_name else {})}
@@ -557,15 +917,26 @@ async def get_fetch_status(canvas_id: int):
 
 # ── Units API ─────────────────────────────────────────────────────────────────
 
+_FILE_TOPIC_RE = re.compile(r"\.(pdf|pptx|docx|txt|md)\s*$", re.IGNORECASE)
+
+
+def _units_cache_is_stale(existing: dict) -> bool:
+    """True si el cache de _units.json es del FORMATO VIEJO: unidades inferidas
+    desde nombres de archivo, con 'topics' que son nombres de PDF (p. ej.
+    "(A1) Lineal.pdf"). Criterio: la mayoría de los topics terminan en extensión
+    de archivo. Ese cache producía prompts con temas basura y nunca se
+    regeneraba solo porque `units` no estaba vacío."""
+    topics = [t for u in (existing or {}).get("units", [])
+              for t in (u.get("topics") or []) if isinstance(t, str) and t.strip()]
+    if not topics:
+        return False
+    file_like = sum(1 for t in topics if _FILE_TOPIC_RE.search(t.strip()))
+    return file_like * 2 > len(topics)
+
+
 @app.get("/api/units/{course}")
-async def get_units(course: str):
-    data_dir = Path("data")
-    course_dir = None
-    if data_dir.exists():
-        for d in data_dir.iterdir():
-            if d.is_dir() and _safe_name(d.name) == course:
-                course_dir = d
-                break
+async def get_units(course: str, refresh: int = 0):
+    course_dir = _find_course_dir(course)
 
     if course_dir:
         units_file = course_dir / "_units.json"
@@ -573,28 +944,125 @@ async def get_units(course: str):
         if units_file.exists():
             try:
                 existing = _json.loads(units_file.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+            # Cache en formato viejo (topics = nombres de archivo) => inválido:
+            # redetectar como si fuera refresh=1 (el override manual de
+            # calendarización se respeta porque detect_units lo mira primero).
+            if not refresh and _units_cache_is_stale(existing):
+                refresh = 1
+            if not refresh:
                 names = [u["name"] for u in existing.get("units", []) if "name" in u]
                 if names:
                     return {"units": names, "source": "units"}
-            except Exception:
-                existing = {}
 
-        # No hay unidades cacheadas: detectarlas leyendo la calendarización (on-demand).
+        # No hay unidades cacheadas (o se pidió refresh): detectar leyendo la
+        # calendarización, recursivo en todo el árbol del curso (respeta un
+        # override manual de calendarización si existe en _units.json).
         try:
             from ingestion.calendar_parser import detect_units
-            units = detect_units(course_dir)
+            model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+            units = detect_units(course_dir, model)
         except Exception:
             units = []
         if units:
             try:
+                # Si se refrescó (calendarización/unidades pudieron cambiar), el
+                # file_map viejo queda obsoleto y se limpia; se reclasifica en el
+                # próximo ingest o al editar unidades manualmente.
+                file_map = {} if refresh else existing.get("file_map", {})
                 units_file.write_text(_json.dumps(
-                    {"units": units, "file_map": existing.get("file_map", {})},
+                    {**existing, "units": units, "file_map": file_map},
                     ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 pass
             return {"units": [u["name"] for u in units if "name" in u], "source": "units"}
 
     return {"units": _get_store().list_files_in_collection(course), "source": "files"}
+
+
+@app.post("/api/units/{course}/calendar")
+async def set_units_calendar(course: str, request: Request):
+    """Override manual: usa un PDF/DOCX concreto como calendarización del curso
+    (para cursos donde la detección automática elige el archivo equivocado o no
+    encuentra ninguno). Redetecta las unidades a partir de ese archivo."""
+    data = await request.json()
+    rel_path = str(data.get("path") or "").strip()
+    if not rel_path:
+        return JSONResponse({"error": "Ruta requerida"}, status_code=400)
+
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return JSONResponse({"error": "Curso no encontrado"}, status_code=404)
+
+    try:
+        target = (course_dir / rel_path).resolve()
+        target.relative_to(course_dir.resolve())
+    except (ValueError, OSError):
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    if not target.is_file() or target.suffix.lower() not in (".pdf", ".docx"):
+        return JSONResponse(
+            {"error": "Archivo no encontrado o tipo no soportado (usa PDF o DOCX)"}, status_code=404
+        )
+
+    from ingestion.calendar_parser import save_calendar_override
+    rel_norm = str(target.relative_to(course_dir.resolve())).replace("\\", "/")
+    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+    try:
+        units = save_calendar_override(course_dir, rel_norm, model)
+    except Exception as e:
+        return JSONResponse({"error": f"No se pudo redetectar: {e}"}, status_code=500)
+
+    return {"ok": True, "units": [u["name"] for u in units if "name" in u]}
+
+
+@app.put("/api/units/{course}")
+async def put_units(course: str, request: Request):
+    """Guarda una lista de unidades editada a mano (renombrar/añadir/eliminar) y
+    reclasifica los archivos del curso en esas unidades (pase determinista +
+    LLM solo para lo ambiguo — barato gracias al pase determinista)."""
+    data = await request.json()
+    units_in = data.get("units")
+    if not isinstance(units_in, list) or not units_in:
+        return JSONResponse({"error": "Lista de unidades inválida"}, status_code=400)
+
+    clean_units: list[dict] = []
+    for u in units_in:
+        if not isinstance(u, dict):
+            continue
+        name = str(u.get("name") or "").strip()
+        if not name:
+            continue
+        topics = [str(t).strip() for t in (u.get("topics") or []) if str(t).strip()]
+        clean_units.append({"name": name, "topics": topics})
+    if not clean_units:
+        return JSONResponse({"error": "Lista de unidades inválida"}, status_code=400)
+
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return JSONResponse({"error": "Curso no encontrado"}, status_code=404)
+
+    from ingestion.calendar_parser import classify_files
+    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+    try:
+        file_map = classify_files(course_dir, clean_units, model)
+    except Exception:
+        file_map = {}
+
+    units_file = course_dir / "_units.json"
+    try:
+        existing = _json.loads(units_file.read_text(encoding="utf-8")) if units_file.exists() else {}
+    except Exception:
+        existing = {}
+    existing["units"] = clean_units
+    existing["file_map"] = file_map
+    try:
+        units_file.write_text(_json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse({"error": f"No se pudo guardar: {e}"}, status_code=500)
+
+    return {"ok": True, "units": [u["name"] for u in clean_units]}
 
 
 # ── Sync API (dashboard manual) ───────────────────────────────────────────────
@@ -744,8 +1212,11 @@ def _run_ingest():
             units_file = course_dir / "_units.json"
             if units_file.exists():
                 try:
-                    unit_maps[course_dir.name] = _json.loads(units_file.read_text(encoding="utf-8"))
-                    continue
+                    existing_units = _json.loads(units_file.read_text(encoding="utf-8"))
+                    # Cache en formato viejo (topics = nombres de archivo): rehacer.
+                    if not _units_cache_is_stale(existing_units):
+                        unit_maps[course_dir.name] = existing_units
+                        continue
                 except Exception:
                     pass
             s["phase"]      = f"Analizando unidades: {course_dir.name}"
@@ -794,7 +1265,11 @@ def _run_ingest():
                 if text.strip():
                     chunks    = chunk(text)
                     file_map  = unit_maps.get(course_name, {}).get("file_map", {})
-                    unit_name = file_map.get(f.name)
+                    try:
+                        relpath = str(f.relative_to(data_dir / course_name)).replace("\\", "/")
+                    except ValueError:
+                        relpath = f.name
+                    unit_name = file_map.get(relpath) or file_map.get(f.name)
                     meta = [
                         {"course": course_name, "file": f.name, "path": str(f),
                          **({"unit": unit_name} if unit_name else {})}
@@ -887,6 +1362,106 @@ async def get_agenda():
     return {"events": events, "fallback": fallback}
 
 
+def _build_range_plan_prompt(from_str: str, to_str: str, events: list[dict], method: str) -> str:
+    """Arma el prompt del plan de estudio día a día para un rango de fechas.
+    Compartido entre /api/agenda/plan (modo nuevo) y /api/agenda/nl."""
+    from chatbot.retriever import Retriever
+
+    from_d = datetime.fromisoformat(from_str)
+    to_d   = datetime.fromisoformat(to_str)
+    total_days = max((to_d - from_d).days + 1, 1)
+
+    # Method description
+    method_hint = ""
+    if method and method != "auto":
+        try:
+            from chatbot.study_methods import METHODS
+            m_obj = next((m for m in METHODS if m["key"] == method), None)
+            if m_obj:
+                method_hint = f"Aplica el método '{m_obj['name']}': {m_obj['short']} "
+        except Exception:
+            pass
+    if not method_hint:
+        method_hint = "Elige el método de estudio más adecuado para el contenido. "
+
+    # Build events summary
+    if events:
+        lines = []
+        for ev in events:
+            syl = f" (temario: {ev.get('syllabus','')})" if ev.get("syllabus") else ""
+            crs = f" [{ev.get('course','')}]" if ev.get("course") else ""
+            lines.append(f"- {ev.get('date','?')} — {ev.get('title','?')}{crs}{syl}")
+        events_txt = "Evaluaciones en el período:\n" + "\n".join(lines) + "\n\n"
+    else:
+        events_txt = "No hay evaluaciones registradas en el período.\n\n"
+
+    # RAG context for unique courses mentioned
+    context_parts = []
+    seen_courses = set()
+    for ev in events[:3]:
+        crs = (ev.get("course") or "").strip()
+        if crs and crs not in seen_courses:
+            seen_courses.add(crs)
+            try:
+                safe = _safe_name(_safe_folder(crs))
+                ctx, _ = Retriever(_get_store()).get_context(
+                    ev.get("title", crs), safe, n=2
+                )
+                if ctx:
+                    context_parts.append(f"[{crs}]\n{ctx}")
+            except Exception:
+                pass
+    material = ("\n\nMaterial de los cursos:\n" + "\n---\n".join(context_parts[:2])) \
+               if context_parts else ""
+
+    return (
+        f"Eres un tutor experto. {method_hint}\n"
+        f"Arma un plan de estudio día a día del {from_str} al {to_str} "
+        f"({total_days} días en total).\n"
+        f"{events_txt}"
+        f"Distribuye el estudio considerando las fechas de evaluación: "
+        f"más intensidad los días previos a cada evaluación.{material}\n"
+        f"Formato: una sección Markdown por día (### Día YYYY-MM-DD), "
+        f"con qué estudiar, qué practicar y una meta concreta. "
+        f"Fórmulas entre $...$. Máximo ~300 palabras."
+    )
+
+
+def _generate_plan_text(from_str: str, to_str: str, events: list[dict], method: str) -> str:
+    """Genera el texto del plan de estudio (día a día) vía el LLM. Compartido entre
+    /api/agenda/plan (modo nuevo) y /api/agenda/nl."""
+    from chatbot import llm
+    prompt = _build_range_plan_prompt(from_str, to_str, events, method)
+    return llm.complete([{"role": "user", "content": prompt}], temperature=0.5)
+
+
+_DAY_HEADING_RE = re.compile(
+    r"^#{1,4}\s*d[ií]a\s+(\d{4}-\d{2}-\d{2})\s*:?\s*(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _split_plan_by_day(plan_text: str) -> list[dict]:
+    """Parsea el markdown '### Día YYYY-MM-DD' del plan en bloques por día:
+    [{date, summary, detail}]. Usado para guardar cada día como evento editable."""
+    matches = list(_DAY_HEADING_RE.finditer(plan_text or ""))
+    days = []
+    for i, m in enumerate(matches):
+        date = m.group(1)
+        inline_title = (m.group(2) or "").strip(" -—:")
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(plan_text)
+        body = plan_text[start:end].strip()
+        if inline_title:
+            summary = inline_title
+        else:
+            first_line = next((l.strip(" -*#") for l in body.splitlines() if l.strip()), "")
+            summary = first_line
+        summary = (summary or "Repaso")[:70]
+        days.append({"date": date, "summary": summary, "detail": body})
+    return days
+
+
 @app.post("/api/agenda/plan")
 async def generate_study_plan(request: Request):
     """Genera un plan de estudio.
@@ -908,70 +1483,13 @@ async def generate_study_plan(request: Request):
         method   = (data.get("method") or "auto").strip()
 
         try:
-            from_d = datetime.fromisoformat(from_str)
-            to_d   = datetime.fromisoformat(to_str)
+            datetime.fromisoformat(from_str)
+            datetime.fromisoformat(to_str)
         except Exception:
             return JSONResponse({"error": "Fechas inválidas"}, status_code=400)
 
-        total_days = max((to_d - from_d).days + 1, 1)
-
-        # Method description
-        method_hint = ""
-        if method and method != "auto":
-            try:
-                from chatbot.study_methods import METHODS
-                m_obj = next((m for m in METHODS if m["key"] == method), None)
-                if m_obj:
-                    method_hint = f"Aplica el método '{m_obj['name']}': {m_obj['short']} "
-            except Exception:
-                pass
-        if not method_hint:
-            method_hint = "Elige el método de estudio más adecuado para el contenido. "
-
-        # Build events summary
-        events_txt = ""
-        if events:
-            lines = []
-            for ev in events:
-                syl = f" (temario: {ev.get('syllabus','')})" if ev.get("syllabus") else ""
-                crs = f" [{ev.get('course','')}]" if ev.get("course") else ""
-                lines.append(f"- {ev.get('date','?')} — {ev.get('title','?')}{crs}{syl}")
-            events_txt = "Evaluaciones en el período:\n" + "\n".join(lines) + "\n\n"
-        else:
-            events_txt = "No hay evaluaciones registradas en el período.\n\n"
-
-        # RAG context for unique courses mentioned
-        context_parts = []
-        seen_courses = set()
-        for ev in events[:3]:
-            crs = (ev.get("course") or "").strip()
-            if crs and crs not in seen_courses:
-                seen_courses.add(crs)
-                try:
-                    safe = _safe_name(_safe_folder(crs))
-                    ctx, _ = Retriever(_get_store()).get_context(
-                        ev.get("title", crs), safe, n=2
-                    )
-                    if ctx:
-                        context_parts.append(f"[{crs}]\n{ctx}")
-                except Exception:
-                    pass
-        material = ("\n\nMaterial de los cursos:\n" + "\n---\n".join(context_parts[:2])) \
-                   if context_parts else ""
-
-        prompt = (
-            f"Eres un tutor experto. {method_hint}\n"
-            f"Arma un plan de estudio día a día del {from_str} al {to_str} "
-            f"({total_days} días en total).\n"
-            f"{events_txt}"
-            f"Distribuye el estudio considerando las fechas de evaluación: "
-            f"más intensidad los días previos a cada evaluación.{material}\n"
-            f"Formato: una sección Markdown por día (### Día YYYY-MM-DD), "
-            f"con qué estudiar, qué practicar y una meta concreta. "
-            f"Fórmulas entre $...$. Máximo ~300 palabras."
-        )
         try:
-            plan = llm.complete([{"role": "user", "content": prompt}], temperature=0.5)
+            plan = _generate_plan_text(from_str, to_str, events, method)
             return {"plan": plan}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -1078,6 +1596,166 @@ async def delete_user_event(event_id: str):
     return {"deleted": True}
 
 
+@app.put("/api/events/{event_id}")
+async def update_user_event(event_id: str, request: Request):
+    data = await request.json()
+    events = _load_user_events()
+    ev = next((e for e in events if e.get("id") == event_id), None)
+    if ev is None:
+        return JSONResponse({"error": "Evento no encontrado"}, status_code=404)
+
+    if "title" in data and data["title"] is not None:
+        title = str(data["title"]).strip()
+        if not title:
+            return JSONResponse({"error": "El nombre no puede quedar vacío"}, status_code=400)
+        ev["title"] = title
+    if "date" in data and data["date"] is not None:
+        date = str(data["date"]).strip()
+        if not date:
+            return JSONResponse({"error": "La fecha no puede quedar vacía"}, status_code=400)
+        ev["date"] = date
+    if "type" in data and data["type"] is not None:
+        ev["type"] = str(data["type"]).strip() or ev.get("type", "Otro")
+    if "syllabus" in data and data["syllabus"] is not None:
+        ev["syllabus"] = str(data["syllabus"])
+    if "notes" in data and data["notes"] is not None:
+        # Alias de 'syllabus': el frontend usa 'notes' para el detalle de eventos de estudio.
+        ev["syllabus"] = str(data["notes"])
+
+    _save_user_events(events)
+    return ev
+
+
+@app.delete("/api/events/plan/{plan_group}")
+async def delete_plan_group(plan_group: str):
+    events = _load_user_events()
+    new_list = [e for e in events if e.get("plan_group") != plan_group]
+    removed = len(events) - len(new_list)
+    if removed == 0:
+        return JSONResponse({"error": "Plan no encontrado"}, status_code=404)
+    _save_user_events(new_list)
+    return {"deleted": True, "count": removed}
+
+
+# ── Agenda por lenguaje natural ────────────────────────────────────────────────
+
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+_EVENT_TYPE_LABELS = {
+    "control": "Control", "certamen": "Certamen", "examen": "Examen",
+    "prueba": "Prueba", "tarea": "Tarea", "otro": "Otro",
+}
+
+
+def _list_course_names() -> list[str]:
+    data_dir = Path("data")
+    if not data_dir.exists():
+        return []
+    return [d.name for d in data_dir.iterdir()
+            if d.is_dir() and _is_academic_course({"name": d.name})]
+
+
+@app.post("/api/agenda/nl")
+async def agenda_from_natural_language(request: Request):
+    """Interpreta un pedido en lenguaje natural ("tengo control de X en una semana
+    más"), crea el evento principal y genera + guarda un plan de estudio día a día
+    como eventos de tipo 'estudio' ligados por `plan_group`."""
+    from chatbot import llm
+
+    data = await request.json()
+    text = (data.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "Escribe qué quieres agendar."}, status_code=400)
+
+    now = datetime.now()
+    weekday_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][now.weekday()]
+    course_names = _list_course_names()
+    courses_txt = ", ".join(course_names) if course_names else "(sin cursos registrados)"
+
+    extract_prompt = (
+        f"Hoy es {now.strftime('%Y-%m-%d')} ({weekday_es}). Extrae de este mensaje de un "
+        f"estudiante los datos de una evaluación o tarea que quiere agendar:\n"
+        f"\"{text}\"\n\n"
+        f"Cursos existentes (usa el nombre EXACTO de esta lista si el mensaje se refiere a uno "
+        f"de ellos; si no aplica ninguno usa null): {courses_txt}\n\n"
+        "Responde SOLO con un JSON, sin texto antes ni después, con esta forma exacta:\n"
+        '{"titulo": "...", "tipo": "control|certamen|examen|prueba|tarea|otro", '
+        '"fecha": "YYYY-MM-DD", "curso": "nombre exacto de la lista o null", "tema": "..."}\n'
+        "La fecha se resuelve en relación a HOY (ej.: 'en una semana más' = hoy + 7 días; "
+        "'el próximo lunes' = el lunes que viene; 'mañana' = hoy + 1 día)."
+    )
+
+    try:
+        raw = llm.complete([{"role": "user", "content": extract_prompt}], temperature=0.2)
+    except Exception as e:
+        return JSONResponse({"error": f"No pude interpretar el mensaje: {e}"}, status_code=500)
+
+    m = _JSON_OBJ_RE.search(raw)
+    if not m:
+        return JSONResponse({"error": "No pude interpretar un evento en ese mensaje."}, status_code=422)
+    try:
+        parsed = _json.loads(m.group(0))
+    except Exception:
+        return JSONResponse({"error": "No pude interpretar el JSON del evento."}, status_code=422)
+
+    titulo = (parsed.get("titulo") or "Evaluación").strip() or "Evaluación"
+    tipo_raw = (parsed.get("tipo") or "otro").strip().lower()
+    fecha = (parsed.get("fecha") or "").strip()
+    tema = (parsed.get("tema") or "").strip()
+    curso = parsed.get("curso")
+    curso = curso.strip() if isinstance(curso, str) else None
+    if curso and curso not in course_names:
+        # Aceptar coincidencia case-insensitive; si no matchea con nada, descartar.
+        match = next((c for c in course_names if c.lower() == curso.lower()), None)
+        curso = match
+
+    try:
+        datetime.fromisoformat(fecha)
+    except Exception:
+        return JSONResponse({"error": "No pude determinar una fecha válida para ese evento."}, status_code=422)
+
+    ev_type_label = _EVENT_TYPE_LABELS.get(tipo_raw, "Otro")
+
+    events_all = _load_user_events()
+    main_ev = {
+        "id": str(uuid.uuid4()), "date": fecha, "title": titulo,
+        "type": ev_type_label, "syllabus": tema,
+    }
+    events_all.append(main_ev)
+
+    plan_events: list[dict] = []
+    today_d = now.date()
+    tomorrow_d = today_d + timedelta(days=1)
+    target_d = datetime.fromisoformat(fecha).date()
+
+    if target_d >= tomorrow_d:
+        plan_from = tomorrow_d.isoformat()
+        plan_ctx = [{"title": titulo, "date": fecha, "course": curso or "", "syllabus": tema}]
+        try:
+            plan_text = _generate_plan_text(plan_from, fecha, plan_ctx, "auto")
+        except Exception:
+            plan_text = ""
+        days = _split_plan_by_day(plan_text) if plan_text else []
+        plan_group = str(uuid.uuid4())
+        for d in days:
+            ev = {
+                "id": str(uuid.uuid4()), "date": d["date"],
+                "title": f"Estudio: {d['summary']}", "type": "estudio",
+                "syllabus": d["detail"], "plan_group": plan_group,
+            }
+            events_all.append(ev)
+            plan_events.append(ev)
+
+    _save_user_events(events_all)
+
+    resumen = f"📅 {ev_type_label} de {titulo} agendado para el {fecha}."
+    if plan_events:
+        resumen += f" Creé un plan de {len(plan_events)} día(s) — puedes editarlo tocando cada día."
+    elif target_d < tomorrow_d:
+        resumen += " Es muy pronto para armar un plan de estudio."
+
+    return {"ok": True, "event": main_ev, "plan_events": plan_events, "resumen": resumen}
+
+
 # ── Study methods API ─────────────────────────────────────────────────────────
 
 @app.get("/api/methods")
@@ -1111,15 +1789,9 @@ async def upload_course_files(course: str, files: List[UploadFile] = File(...)):
     from ingestion.chunker import chunk
 
     # Resolve data dir (match by safe_name)
-    data_dir = Path("data")
-    course_dir: Path | None = None
-    if data_dir.exists():
-        for d in data_dir.iterdir():
-            if d.is_dir() and _safe_name(d.name) == course:
-                course_dir = d
-                break
+    course_dir = _find_course_dir(course)
     if course_dir is None:
-        course_dir = data_dir / course
+        course_dir = Path("data") / course
         course_dir.mkdir(parents=True, exist_ok=True)
 
     store = _get_store()
@@ -1149,3 +1821,583 @@ async def upload_course_files(course: str, files: List[UploadFile] = File(...)):
             failures.append(f"{fname}: {e}")
 
     return {"indexed": indexed, "failures": failures}
+
+
+# ===== Gestor de archivos =====
+
+_DATA_ROOT = Path("data").resolve()
+
+# Extensiones que el navegador puede mostrar inline (PDF e imágenes)
+_INLINE_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+# Extensiones de texto plano / código previsualizables directamente
+_TEXT_PREVIEW_EXTS = {
+    ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".c", ".cpp", ".h", ".hpp",
+    ".java", ".html", ".css", ".json", ".ipynb", ".sh", ".yml", ".yaml", ".xml", ".csv",
+}
+# Documentos que se previsualizan extrayendo el texto (sin conservar formato)
+_DOC_PREVIEW_EXTS = {".pptx", ".docx"}
+_PREVIEW_MAX_CHARS = 200_000
+
+
+def _safe_data_path(rel: str) -> Path:
+    """Resuelve `rel` contra data/ rechazando cualquier intento de escape
+    (rutas absolutas, letras de unidad de Windows, `..`). Lanza ValueError
+    si la ruta no es segura. Úsalo en TODOS los endpoints de /api/files*."""
+    rel = (rel or "").strip()
+    if not rel:
+        return _DATA_ROOT
+    rel = rel.replace("\\", "/").strip("/")
+    if not rel:
+        return _DATA_ROOT
+    # Letra de unidad de Windows (C:, D:, etc.) en cualquier posición
+    if re.search(r"[a-zA-Z]:", rel):
+        raise ValueError("Ruta inválida")
+    parts = PurePosixPath(rel).parts
+    if any(part in ("..", "") or part == "/" for part in parts):
+        raise ValueError("Ruta inválida")
+    candidate = _DATA_ROOT.joinpath(*parts).resolve()
+    try:
+        candidate.relative_to(_DATA_ROOT)
+    except ValueError:
+        raise ValueError("Ruta inválida")
+    return candidate
+
+
+def _count_files(dir_path: Path) -> int:
+    """Cuenta archivos visibles (no ocultos, no metadata `_*`) bajo un directorio, recursivo."""
+    count = 0
+    try:
+        for entry in dir_path.rglob("*"):
+            if entry.is_file() and not entry.name.startswith((".", "_")):
+                count += 1
+    except Exception:
+        pass
+    return count
+
+
+@app.get("/api/files")
+async def api_list_files(path: str = ""):
+    try:
+        target = _safe_data_path(path)
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    if not target.exists():
+        if target == _DATA_ROOT:
+            return {"dirs": [], "files": []}
+        return JSONResponse({"error": "Carpeta no encontrada"}, status_code=404)
+    if not target.is_dir():
+        return JSONResponse({"error": "No es una carpeta"}, status_code=400)
+
+    dirs, files = [], []
+    for entry in sorted(target.iterdir(), key=lambda e: e.name.lower()):
+        if entry.name.startswith((".", "_")):
+            continue
+        if entry.is_dir():
+            dirs.append({"name": entry.name, "count": _count_files(entry)})
+        else:
+            try:
+                st = entry.stat()
+                size, mtime = st.st_size, st.st_mtime
+            except Exception:
+                size, mtime = 0, 0
+            files.append({
+                "name": entry.name,
+                "size": size,
+                "mtime": mtime,
+                "ext": entry.suffix.lower().lstrip("."),
+            })
+
+    return {"dirs": dirs, "files": files}
+
+
+@app.post("/api/files/move")
+async def api_move_file(request: Request):
+    data = await request.json()
+    try:
+        src = _safe_data_path(data.get("src", ""))
+        dst_dir = _safe_data_path(data.get("dst_dir", ""))
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    if src == _DATA_ROOT:
+        return JSONResponse({"error": "No se puede mover la carpeta raíz"}, status_code=400)
+    if not src.exists():
+        return JSONResponse({"error": "Origen no encontrado"}, status_code=404)
+    if not dst_dir.exists() or not dst_dir.is_dir():
+        return JSONResponse({"error": "Carpeta destino no encontrada"}, status_code=404)
+
+    if src.is_dir():
+        try:
+            dst_dir.relative_to(src)
+            return JSONResponse(
+                {"error": "No se puede mover una carpeta dentro de sí misma"}, status_code=400
+            )
+        except ValueError:
+            pass
+
+    if src.parent == dst_dir:
+        return {"moved": True}  # ya está ahí, no-op
+
+    dest = dst_dir / src.name
+    if dest.exists():
+        return JSONResponse(
+            {"error": "Ya existe un archivo o carpeta con ese nombre en el destino"}, status_code=409
+        )
+
+    try:
+        shutil.move(str(src), str(dest))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"moved": True}
+
+
+@app.post("/api/files/rename")
+async def api_rename_file(request: Request):
+    data = await request.json()
+    try:
+        target = _safe_data_path(data.get("path", ""))
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    if target == _DATA_ROOT:
+        return JSONResponse({"error": "No se puede renombrar la carpeta raíz"}, status_code=400)
+    new_name = _safe_folder((data.get("new_name") or "").strip())
+    if not new_name:
+        return JSONResponse({"error": "Nombre inválido"}, status_code=400)
+    if not target.exists():
+        return JSONResponse({"error": "No encontrado"}, status_code=404)
+
+    dest = target.parent / new_name
+    if dest.exists():
+        return JSONResponse(
+            {"error": "Ya existe un archivo o carpeta con ese nombre"}, status_code=409
+        )
+    try:
+        target.rename(dest)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"renamed": True, "name": new_name}
+
+
+@app.delete("/api/files")
+async def api_delete_file(request: Request, path: str = ""):
+    rel = path
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body or {}
+    if not rel:
+        rel = body.get("path", "")
+    recursive = bool(body.get("recursive", False))
+
+    try:
+        target = _safe_data_path(rel)
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    if target == _DATA_ROOT:
+        return JSONResponse({"error": "No se puede borrar la carpeta raíz"}, status_code=400)
+    if not target.exists():
+        return JSONResponse({"error": "No encontrado"}, status_code=404)
+
+    # Curso de primer nivel (data/<curso>/): si se borra, también su colección
+    # de ChromaDB (si existe) para no dejar una colección huérfana.
+    is_course_root = target.parent == _DATA_ROOT and target.is_dir()
+    course_name = target.name
+
+    try:
+        if target.is_dir():
+            has_content = any(target.iterdir())
+            if has_content and not recursive:
+                count = _count_files(target)
+                return JSONResponse(
+                    {"error": "La carpeta no está vacía", "needs_recursive": True, "count": count},
+                    status_code=409,
+                )
+            if has_content:
+                shutil.rmtree(target)
+            else:
+                target.rmdir()
+        else:
+            target.unlink()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    if is_course_root:
+        try:
+            _get_store().drop_collection(course_name)
+        except Exception:
+            pass
+
+    return {"deleted": True}
+
+
+@app.post("/api/files/mkdir")
+async def api_mkdir_file(request: Request):
+    data = await request.json()
+    try:
+        parent = _safe_data_path(data.get("path", ""))
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    name = _safe_folder((data.get("name") or "").strip())
+    if not name:
+        return JSONResponse({"error": "Nombre inválido"}, status_code=400)
+    if not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
+    if not parent.is_dir():
+        return JSONResponse({"error": "La ruta padre no es una carpeta"}, status_code=400)
+
+    dest = parent / name
+    if dest.exists():
+        return JSONResponse(
+            {"error": "Ya existe un archivo o carpeta con ese nombre"}, status_code=409
+        )
+    try:
+        dest.mkdir(parents=True)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"created": True, "name": name}
+
+
+@app.post("/api/files/upload")
+async def api_upload_to_folder(path: str = "", files: List[UploadFile] = File(...)):
+    try:
+        target_dir = _safe_data_path(path)
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    failures: list[str] = []
+
+    for upload in files:
+        fname = _safe_folder(Path(upload.filename or "archivo").name)
+        if not fname or fname.startswith("._"):
+            continue
+        dest = target_dir / fname
+        try:
+            content = await upload.read()
+            dest.write_bytes(content)
+            saved.append(fname)
+        except Exception as e:
+            failures.append(f"{fname}: {e}")
+
+    return {"saved": saved, "failures": failures}
+
+
+@app.get("/api/files/raw")
+async def api_raw_file(path: str = ""):
+    try:
+        target = _safe_data_path(path)
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+    if not target.exists() or not target.is_file():
+        return JSONResponse({"error": "No encontrado"}, status_code=404)
+
+    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    disposition = "inline" if target.suffix.lower() in _INLINE_EXTS else "attachment"
+    return FileResponse(
+        target, media_type=media_type, filename=target.name,
+        content_disposition_type=disposition,
+    )
+
+
+@app.get("/api/files/preview")
+async def api_preview_file(path: str = ""):
+    try:
+        target = _safe_data_path(path)
+    except ValueError:
+        return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+    if not target.exists() or not target.is_file():
+        return JSONResponse({"error": "No encontrado"}, status_code=404)
+
+    ext = target.suffix.lower()
+
+    if ext in _DOC_PREVIEW_EXTS:
+        try:
+            from ingestion.parsers import parse
+            text = parse(target)
+            return {"kind": "doc", "content": text[:_PREVIEW_MAX_CHARS]}
+        except Exception as e:
+            return JSONResponse({"error": f"No se pudo extraer el texto: {e}"}, status_code=500)
+
+    if ext in _TEXT_PREVIEW_EXTS:
+        try:
+            content = target.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return {"kind": "text", "content": content[:_PREVIEW_MAX_CHARS]}
+
+    # PDF, imágenes y cualquier otro tipo: el frontend usa /api/files/raw directamente
+    return {"kind": "raw"}
+
+
+# ===== Ordenar curso (organización automática por unidades/evaluaciones) =====
+
+_EVAL_NAME_RE = re.compile(r"\b(pauta|solucion(ario)?|control|certamen|examen|prueba|test)\b")
+_OLD_HINT_RE = re.compile(r"anterior|pasado|2023|2024|2025")
+_YEAR_TOKEN_RE = re.compile(r"20\d{2}")
+
+
+def _dest_with_suffix(dest: Path) -> Path:
+    """Si `dest` ya existe, devuelve una variante 'nombre (2).ext', 'nombre (3).ext'..."""
+    if not dest.exists():
+        return dest
+    stem, suffix, parent = dest.stem, dest.suffix, dest.parent
+    i = 2
+    while True:
+        candidate = parent / f"{stem} ({i}){suffix}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _reorganize_reindex(course_name: str, pairs: list[tuple[str, str, str | None]]) -> None:
+    """Corrige la metadata (path/file/unit) de los chunks ya indexados de un curso
+    tras aplicar o deshacer un orden, en un hilo de fondo. No re-embebe."""
+    try:
+        from ingestion.vectorstore import VectorStore
+        VectorStore().update_chunk_paths(course_name, pairs)
+    except Exception:
+        pass
+
+
+@app.post("/api/files/organize/plan")
+async def organize_plan(request: Request):
+    """Genera un plan de reorganización del curso en Unidad N / Evaluaciones / Otros
+    SIN mover nada. El frontend lo muestra en un modal para confirmar."""
+    data = await request.json()
+    course = str(data.get("course") or "").strip()
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return JSONResponse({"error": "Curso no encontrado"}, status_code=404)
+
+    from ingestion.calendar_parser import (
+        build_unit_map, classify_files, find_calendar_file, _iter_files, _normalize,
+    )
+
+    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+    units_file = course_dir / "_units.json"
+    try:
+        existing = _json.loads(units_file.read_text(encoding="utf-8")) if units_file.exists() else {}
+    except Exception:
+        existing = {}
+    units = existing.get("units") or []
+
+    if units:
+        try:
+            file_map = classify_files(course_dir, units, model)
+        except Exception:
+            file_map = existing.get("file_map") or {}
+    else:
+        try:
+            unit_data = build_unit_map(course_dir, model)
+        except Exception:
+            unit_data = {"units": [], "file_map": {}}
+        units = unit_data.get("units") or []
+        file_map = unit_data.get("file_map") or {}
+
+    calendar_file = find_calendar_file(course_dir)
+    calendar_resolved = calendar_file.resolve() if calendar_file else None
+
+    current_year = datetime.now().year
+    plan: list[dict] = []
+    resumen: dict[str, int] = {}
+
+    for f, rel_parts in _iter_files(course_dir):
+        if calendar_resolved is not None and f.resolve() == calendar_resolved:
+            continue
+        relpath = "/".join(rel_parts)
+        name = f.name
+        name_norm = _normalize(name)
+
+        if _EVAL_NAME_RE.search(name_norm):
+            years = [int(y) for y in _YEAR_TOKEN_RE.findall(name)]
+            is_old = any(y != current_year for y in years) or bool(_OLD_HINT_RE.search(name_norm))
+            folder = "Evaluaciones/Pautas anteriores" if is_old else "Evaluaciones/Semestre actual"
+        else:
+            unit_name = file_map.get(relpath) or file_map.get(name)
+            folder = _safe_folder(unit_name) if unit_name else "Otros"
+
+        dst_rel = f"{folder}/{name}"
+        resumen[folder] = resumen.get(folder, 0) + 1
+        if relpath != dst_rel:
+            plan.append({"src": relpath, "dst": dst_rel})
+
+    return {"plan": plan, "resumen": {"por_carpeta": resumen}}
+
+
+@app.post("/api/files/organize/apply")
+async def organize_apply(request: Request):
+    """Aplica (mueve físicamente) un plan de reorganización ya confirmado por el
+    usuario. Actualiza _units.json (file_map) y dispara la corrección de metadata
+    de la colección vectorial en segundo plano."""
+    data = await request.json()
+    course = str(data.get("course") or "").strip()
+    moves_in = data.get("moves")
+
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return JSONResponse({"error": "Curso no encontrado"}, status_code=404)
+    course_dir = course_dir.resolve()
+    if not isinstance(moves_in, list) or not moves_in:
+        return JSONResponse({"error": "Lista de movimientos vacía"}, status_code=400)
+
+    resolved: list[tuple[str, Path, str, Path]] = []
+    for m in moves_in:
+        if not isinstance(m, dict):
+            return JSONResponse({"error": "Movimiento inválido"}, status_code=400)
+        src_rel = str(m.get("src") or "").strip()
+        dst_rel = str(m.get("dst") or "").strip()
+        if not src_rel or not dst_rel:
+            return JSONResponse({"error": "src/dst requeridos"}, status_code=400)
+        try:
+            src_path = _safe_data_path(f"{course_dir.name}/{src_rel}")
+            dst_path = _safe_data_path(f"{course_dir.name}/{dst_rel}")
+        except ValueError:
+            return JSONResponse({"error": "Ruta inválida"}, status_code=400)
+        resolved.append((src_rel, src_path, dst_rel, dst_path))
+
+    units_file = course_dir / "_units.json"
+    try:
+        existing = _json.loads(units_file.read_text(encoding="utf-8")) if units_file.exists() else {}
+    except Exception:
+        existing = {}
+    file_map = dict(existing.get("file_map") or {})
+
+    applied_moves: list[dict] = []
+    metadata_pairs: list[tuple[str, str, str | None]] = []
+
+    for src_rel, src_path, dst_rel, dst_path in resolved:
+        if not src_path.exists() or not src_path.is_file():
+            continue  # ya no está ahí (movido/borrado mientras tanto) -> se ignora
+        try:
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            continue
+        final_dst = dst_path if not dst_path.exists() else _dest_with_suffix(dst_path)
+        try:
+            shutil.move(str(src_path), str(final_dst))
+        except Exception:
+            continue
+
+        final_rel = "/".join(final_dst.relative_to(course_dir).parts)
+        applied_moves.append({"src": src_rel, "dst_final": final_rel})
+
+        unit_val = file_map.pop(src_rel, None)
+        if unit_val is not None:
+            file_map[final_rel] = unit_val
+            file_map[final_dst.name] = unit_val
+
+        metadata_pairs.append((str(src_path), str(final_dst), unit_val))
+
+    existing["file_map"] = file_map
+    try:
+        units_file.write_text(_json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        (course_dir / "_orden_log.json").write_text(_json.dumps(
+            {"applied_at": datetime.now(timezone.utc).isoformat(), "moves": applied_moves},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    if metadata_pairs:
+        threading.Thread(
+            target=_reorganize_reindex, args=(course_dir.name, metadata_pairs), daemon=True
+        ).start()
+
+    return {"ok": True, "moved": len(applied_moves), "reindexing": bool(metadata_pairs)}
+
+
+@app.get("/api/files/organize/status")
+async def organize_status(course: str = ""):
+    """Le dice al frontend si hay un orden aplicado para poder mostrar '↩ Deshacer'."""
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return {"has_log": False}
+    return {"has_log": (course_dir / "_orden_log.json").is_file()}
+
+
+@app.post("/api/files/organize/undo")
+async def organize_undo(request: Request):
+    """Revierte el último orden aplicado (dst -> src), actualiza file_map y
+    borra el log. Ignora movimientos cuyo archivo ya no está donde se dejó, o
+    cuyo destino original está ocupado (no sobreescribe)."""
+    data = await request.json()
+    course = str(data.get("course") or "").strip()
+    course_dir = _find_course_dir(course)
+    if not course_dir:
+        return JSONResponse({"error": "Curso no encontrado"}, status_code=404)
+
+    log_path = course_dir / "_orden_log.json"
+    if not log_path.is_file():
+        return JSONResponse({"error": "No hay una reorganización para deshacer"}, status_code=404)
+
+    try:
+        log = _json.loads(log_path.read_text(encoding="utf-8"))
+    except Exception:
+        return JSONResponse({"error": "Registro de orden corrupto"}, status_code=500)
+    moves = log.get("moves") or []
+
+    units_file = course_dir / "_units.json"
+    try:
+        existing = _json.loads(units_file.read_text(encoding="utf-8")) if units_file.exists() else {}
+    except Exception:
+        existing = {}
+    file_map = dict(existing.get("file_map") or {})
+
+    restored: list[str] = []
+    metadata_pairs: list[tuple[str, str, str | None]] = []
+
+    for mv in reversed(moves):
+        src_rel = str(mv.get("src") or "").strip()
+        dst_rel = str(mv.get("dst_final") or "").strip()
+        if not src_rel or not dst_rel:
+            continue
+        try:
+            dst_path = _safe_data_path(f"{course_dir.name}/{dst_rel}")
+            src_path = _safe_data_path(f"{course_dir.name}/{src_rel}")
+        except ValueError:
+            continue
+        if not dst_path.exists() or not dst_path.is_file():
+            continue  # ya no existe donde el log dice -> se ignora
+        if src_path.exists():
+            continue  # el destino original está ocupado -> no se sobreescribe
+
+        try:
+            src_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dst_path), str(src_path))
+        except Exception:
+            continue
+
+        restored.append(src_rel)
+        unit_val = file_map.pop(dst_rel, None)
+        if unit_val is not None:
+            file_map[src_rel] = unit_val
+            file_map[src_path.name] = unit_val
+        metadata_pairs.append((str(dst_path), str(src_path), unit_val))
+
+    existing["file_map"] = file_map
+    try:
+        units_file.write_text(_json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        log_path.unlink()
+    except Exception:
+        pass
+
+    if metadata_pairs:
+        threading.Thread(
+            target=_reorganize_reindex, args=(course_dir.name, metadata_pairs), daemon=True
+        ).start()
+
+    return {"ok": True, "restored": len(restored)}

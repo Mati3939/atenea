@@ -18,6 +18,14 @@ build/
 chroma_db/
 data/
 
+# Datos personales / de sesión (transcripciones, eventos de calendario, reportes generados)
+logs/
+reporte_estudio.txt
+
+# Material académico local (no necesario para correr la app)
+Recursos/
+poster/
+
 # OS
 .DS_Store
 Thumbs.db

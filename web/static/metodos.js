@@ -7,6 +7,11 @@ function _esc(t) {
 let _allMethods = [];
 let _recommendedKeys = [];
 
+// Navega al chat con el método preseleccionado (feature "Probar este método").
+function _tryMethod(key, name) {
+  window.location.href = '/?method=' + encodeURIComponent(key) + '&label=' + encodeURIComponent(name);
+}
+
 function _methodCard(m, highlighted) {
   const div = document.createElement('div');
   div.className = 'method-card' + (highlighted ? ' method-card--highlight' : '');
@@ -14,8 +19,15 @@ function _methodCard(m, highlighted) {
     <div class="method-card-emoji">${_esc(m.emoji)}</div>
     <div class="method-card-name">${_esc(m.name)}</div>
     <div class="method-card-short">${_esc(m.short)}</div>
+    <div class="method-card-actions">
+      <button type="button" class="btn btn-secondary btn-sm method-try-btn">▶ Probar este método</button>
+    </div>
   `;
   div.addEventListener('click', () => showDetail(m.key));
+  div.querySelector('.method-try-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    _tryMethod(m.key, m.name);
+  });
   return div;
 }
 
@@ -38,6 +50,14 @@ function showDetail(key) {
   tagsEl.innerHTML = (m.best_for || []).map(t =>
     `<span class="method-tag">${_esc(t)}</span>`
   ).join('');
+
+  const tryBtn = document.getElementById('detail-try-btn');
+  if (tryBtn) tryBtn.onclick = () => _tryMethod(m.key, m.name);
+
+  // El método Pomodoro tiene su propio panel fijo y siempre visible en esta
+  // página (más abajo); desde el detalle ofrecemos un atajo directo a él.
+  const pomodoroLink = document.getElementById('detail-pomodoro-link');
+  if (pomodoroLink) pomodoroLink.style.display = (m.key === 'pomodoro') ? 'block' : 'none';
 
   const panel = document.getElementById('method-detail');
   panel.style.display = 'flex';

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Generator
 from chatbot import llm
-from chatbot.prompts import build_system_prompt
+from chatbot.prompts import build_system_prompt, _is_review_unit
 from chatbot.latex import normalize_latex
 from chatbot.retriever import Retriever
 from ingestion.vectorstore import VectorStore
@@ -14,7 +14,41 @@ from ingestion.vectorstore import VectorStore
 # gastar el cupo de tokens-por-minuto de Groq (free tier: 12k TPM en el 70B).
 MAX_HISTORY_MESSAGES = 8
 
+# Turnos (mensajes user/assistant) guardados en `transcript` para repintar el
+# historial de sesiones en la UI (ver save_state).
+TRANSCRIPT_MAX_TURNS = 60
+
 WEB_SESSIONS_DIR = Path("logs") / "web_sessions"
+
+DATA_DIR = Path("data")
+
+
+def _safe_name(name: str) -> str:
+    """Misma lógica que VectorStore._safe_name / web.main._safe_name (replicada
+    para no crear un import circular con la web)."""
+    s = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)[:63]
+    s = re.sub(r"^[^a-zA-Z0-9]+", "", s)
+    s = re.sub(r"[^a-zA-Z0-9]+$", "", s)
+    return s.ljust(3, "0") if s else "col"
+
+
+def _course_label(course_safe: str | None) -> str | None:
+    """Nombre legible del curso: mapea el safe_name que usa el chat a la carpeta
+    real en data/ (p. ej. 'LGEBRA_LINEAL' → 'ÁLGEBRA LINEAL')."""
+    if not course_safe:
+        return None
+    if "/" in course_safe or "\\" in course_safe or ".." in course_safe:
+        return None
+    try:
+        if (DATA_DIR / course_safe).is_dir():
+            return course_safe
+        for d in DATA_DIR.iterdir():
+            if d.is_dir() and _safe_name(d.name) == course_safe:
+                return d.name
+    except OSError:
+        pass
+    return None
+
 
 # ── Detección de intención (regex con límites de palabra) ─────────────────────
 
@@ -73,6 +107,34 @@ def _is_injection(text: str) -> bool:
     return bool(_INJECTION_RE.search(text or ""))
 
 
+# ── Agendado por lenguaje natural (detección conservadora) ────────────────────
+# Solo dispara si hay un anuncio de evaluación PROPIO ("tengo...") Y una mención
+# temporal explícita; así "no entiendo el control de flujo" o "¿qué es un examen
+# de hipótesis?" (sin "tengo" ni fecha) nunca matchean.
+_AGENDA_RE = re.compile(
+    r"tengo\s+(?:un[ao]?\s+)?(?:control|certamen|examen|prueba|test|tarea)\b.{0,60}?"
+    r"(?:"
+    r"en\s+\d+\s+(?:d[ií]as?|semanas?)"
+    r"|en\s+un[ao]\s+(?:d[ií]a|semana|mes)(?:\s+m[áa]s)?"
+    r"|la\s+pr[oó]xima\s+semana|el\s+pr[oó]ximo\s+mes"
+    r"|pr[oó]xim\w+\s+(?:semana|lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo|mes)"
+    r"|este\s+(?:lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo|fin\s+de\s+semana)"
+    r"|ma[ñn]ana|pasado\s+ma[ñn]ana|dentro\s+de\s+\d+\s+(?:d[ií]as?|semanas?)"
+    # Menciones temporales coloquiales de "pronto/se acerca" (sin fecha exacta):
+    # "pronto", "ya viene", "se acerca", "esta semana", "el finde"... (feedback:
+    # "tengo certamen pronto" no matcheaba porque 'pronto' no estaba cubierto).
+    r"|\bpront\w*\b|\bluego\b|ya\s+viene|se\s+acerca|se\s+viene|est[áa]\s+cerca"
+    r"|\bencima\b|esta\s+semana|este\s+mes|en\s+unos\s+d[ií]as|en\s+unas\s+semanas"
+    r"|en\s+pocos\s+d[ií]as|este\s+finde|el\s+finde"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_agenda_request(text: str) -> bool:
+    return bool(_AGENDA_RE.search(text or ""))
+
+
 def _detect_intent(text: str) -> str:
     if _SOLUTION_RE.search(text):
         return "wants_solution"
@@ -103,16 +165,76 @@ class AteneoChat:
         self.current_topic: str = ""      # tema activo extraído de los mensajes
         self._last_mode: str | None = None  # último modo enviado (estudiar/ejercitar/preguntar)
         self._method: str | None = None   # método de estudio activo (key de study_methods)
+        self._last_course: str | None = None    # último curso (safe_name) usado en este chat
+        self._last_unit: str | None = None      # última unidad activa
+        self._last_difficulty: str = "practicando"
+        self._last_options: list[str] | None = None  # últimas quick-replies emitidas
+        self._units_meta_cache: dict[str, dict] = {}  # course_safe -> _units.json parseado
+
+    # ── Metadatos del curso (nombre legible + unidades de _units.json) ────────
+
+    def _load_units_meta(self, course_safe: str | None) -> dict:
+        """Lee data/<curso>/_units.json (tolerante a formato viejo o ausente) y
+        cachea por sesión. Devuelve {"units": [{"name","topics"}...]} o {}."""
+        if not course_safe:
+            return {}
+        if course_safe in self._units_meta_cache:
+            return self._units_meta_cache[course_safe]
+        meta: dict = {}
+        label = _course_label(course_safe)
+        if label:
+            try:
+                raw = json.loads((DATA_DIR / label / "_units.json").read_text(encoding="utf-8"))
+                units = []
+                for u in (raw or {}).get("units", []):
+                    if isinstance(u, dict) and u.get("name"):
+                        topics = [str(t) for t in (u.get("topics") or []) if str(t).strip()]
+                        units.append({"name": str(u["name"]), "topics": topics})
+                if units:
+                    meta = {"units": units}
+            except Exception:
+                meta = {}
+        self._units_meta_cache[course_safe] = meta
+        return meta
+
+    def _unit_topics_and_others(self, course_safe: str | None,
+                                unit: str | None) -> tuple[list[str], list[str]]:
+        """(topics de la unidad activa, nombres de las demás unidades)."""
+        meta = self._load_units_meta(course_safe)
+        units = meta.get("units", [])
+        if not units:
+            return [], []
+        topics: list[str] = []
+        others: list[str] = []
+        unit_l = (unit or "").strip().lower()
+        for u in units:
+            if unit_l and u["name"].strip().lower() == unit_l:
+                topics = u.get("topics", [])
+            else:
+                others.append(u["name"])
+        return topics, others
 
     # ── Flujo principal ───────────────────────────────────────────────────────
 
     def chat(self, user_message: str, course: str = None, unit: str = None,
              difficulty: str = "practicando", mode: str = None, method: str = None) -> dict:
         if _is_injection(user_message):
-            return self._injection_reply(user_message)
-        intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode, method)
-        raw = llm.complete(messages)
-        return self._finalize(user_message, intent, sources, raw)
+            result = self._injection_reply(user_message)
+        elif _is_agenda_request(user_message):
+            result = self._agenda_reply(user_message)
+        else:
+            intent, sources, messages = self._prepare(user_message, course, unit, difficulty, mode, method)
+            raw = llm.complete(messages)
+            result = self._finalize(user_message, intent, sources, raw)
+            # Info del proveedor/modelo que realmente respondió (thread-local,
+            # se lee justo tras llm.complete() en este mismo hilo — así el
+            # frontend puede avisar si la respuesta vino de un modelo de
+            # reserva en vez del primario configurado).
+            served = llm.last_served()
+            result["degraded"] = served.get("degraded", False)
+            result["provider"] = served.get("provider")
+        self._last_options = result.get("options")
+        return result
 
     def chat_stream(self, user_message: str, course: str = None, unit: str = None,
                     difficulty: str = "practicando", mode: str = None,
@@ -121,6 +243,13 @@ class AteneoChat:
         {'done': True, 'text': str, 'options': list|None} con el texto normalizado."""
         if _is_injection(user_message):
             result = self._injection_reply(user_message)
+            self._last_options = result.get("options")
+            yield {"delta": result["text"]}
+            yield {"done": True, "text": result["text"], "options": result["options"]}
+            return
+        if _is_agenda_request(user_message):
+            result = self._agenda_reply(user_message)
+            self._last_options = result.get("options")
             yield {"delta": result["text"]}
             yield {"done": True, "text": result["text"], "options": result["options"]}
             return
@@ -130,7 +259,10 @@ class AteneoChat:
             raw += delta
             yield {"delta": delta}
         result = self._finalize(user_message, intent, sources, raw)
-        yield {"done": True, "text": result["text"], "options": result["options"]}
+        served = llm.last_served()
+        self._last_options = result.get("options")
+        yield {"done": True, "text": result["text"], "options": result["options"],
+               "degraded": served.get("degraded", False), "provider": served.get("provider")}
 
     def _injection_reply(self, user_message: str) -> dict:
         """Respuesta fija ante un intento de manipulación; no llama al LLM ni cambia el
@@ -146,6 +278,21 @@ class AteneoChat:
         })
         return {"text": text, "options": options}
 
+    def _agenda_reply(self, user_message: str) -> dict:
+        """Respuesta fija cuando el estudiante anuncia una evaluación con fecha
+        ("tengo control de X en una semana más"): no llama al LLM, redirige a
+        Organización donde puede agendarla y generar un plan de estudio."""
+        text = ("¡Eso es importante! 📅 Puedo agendarlo y armarte un plan de estudio. "
+                "Ve a **Organización** y escríbelo en 'Dile a Atenea', o sigue estudiando aquí.")
+        self.history.append({"role": "user", "content": user_message})
+        self.history.append({"role": "assistant", "content": text})
+        options = ["📅 Abrir Organización", "Seguir estudiando"]
+        self.session_log.append({
+            "turn": len(self.session_log) + 1, "user": user_message,
+            "sources": [], "assistant": text, "state": self.exercise_state,
+        })
+        return {"text": text, "options": options}
+
     # ── Preparación y cierre de cada turno ───────────────────────────────────
 
     def _prepare(self, user_message: str, course: str | None, unit: str | None,
@@ -154,6 +301,9 @@ class AteneoChat:
             self._last_mode = mode
         if method is not None:
             self._method = method
+        self._last_course = course
+        self._last_unit = unit
+        self._last_difficulty = difficulty
         intent = _detect_intent(user_message)
 
         # No se adjunta material crudo en dos situaciones (y de paso se ahorra el embedding):
@@ -175,8 +325,15 @@ class AteneoChat:
             else:
                 context, sources = self.retriever.get_context_all(rag_query)
 
+        # Anclar la disciplina: nombre legible del ramo + temas de la unidad activa
+        # (fix del bug "ejercicio de integrales en Álgebra Lineal": el prompt nunca
+        # recibía el curso y el modelo adivinaba la disciplina desde sus ejemplos).
+        course_label = _course_label(course)
+        topics, other_units = self._unit_topics_and_others(course, unit)
         system_prompt = build_system_prompt(self.exercise_state, unit, difficulty,
-                                             mode, self._method)
+                                             mode, self._method,
+                                             course=course_label, topics=topics,
+                                             other_units=other_units)
 
         messages = [{"role": "system", "content": system_prompt}]
         # El material va como referencia de SISTEMA (no como parte del mensaje del
@@ -197,12 +354,29 @@ class AteneoChat:
         # Para ejercicios, una directiva explícita evita que el modelo copie/continúe
         # las pautas del material (que traen soluciones y matemática rota del PDF).
         if intent == "wants_exercise":
-            topic = self.current_topic or unit or "el tema en estudio"
+            de_curso = f" de {course_label}" if course_label else ""
+            if unit and _is_review_unit(unit) and not self.current_topic:
+                # Unidad de repaso: "repaso" no es un tema — pedir cobertura del curso,
+                # anclando con temas CONCRETOS (nombres de las otras unidades).
+                alcance = "que cubra alguno de los temas principales del curso"
+                ejemplos = ", ".join(u for u in other_units if u)[:300]
+                if ejemplos:
+                    alcance += f" (por ejemplo: {ejemplos})"
+            else:
+                topic = self.current_topic or unit or "el tema en estudio"
+                alcance = f"sobre {topic}"
+            # La restricción de disciplina se repite en el ÚLTIMO mensaje (recencia):
+            # es la señal más fuerte para que el modelo no derive a otro ramo.
+            disciplina = (
+                f" El ejercicio DEBE pertenecer a la disciplina de {course_label}; "
+                "no propongas ejercicios de otra materia." if course_label else ""
+            )
             api_user = (
-                f"Plantéame UN ejercicio nuevo sobre {topic}, del mismo tipo y nivel que el "
-                "material del curso. Escribe SOLO el enunciado, redactado por ti con LaTeX "
-                "correcto entre signos de dólar. No copies texto del material, no incluyas "
-                "solución ni pistas, y termina con '¿Cuál es tu enfoque para resolverlo?'."
+                f"Plantéame UN ejercicio nuevo{de_curso} {alcance}, del mismo tipo y nivel "
+                "que el material del curso. Escribe SOLO el enunciado, redactado por ti con "
+                "LaTeX correcto entre signos de dólar. No copies texto del material, no "
+                "incluyas solución ni pistas, y termina con "
+                f"'¿Cuál es tu enfoque para resolverlo?'.{disciplina}"
             )
         else:
             api_user = user_message
@@ -316,8 +490,30 @@ class AteneoChat:
         return path
 
     def save_state(self, web_session_id: str) -> None:
-        """Persiste el estado completo para sobrevivir reinicios del servidor."""
+        """Persiste el estado completo para sobrevivir reinicios del servidor.
+
+        Incluye un `transcript` (últimos TRANSCRIPT_MAX_TURNS turnos, roles user/assistant
+        con texto plano) apto para repintar la UI del historial de sesiones sin depender
+        del formato interno de `history`, y `updated_at` para ordenar/mostrar el historial.
+        Preserva un `title` custom (puesto vía PUT /api/sessions/{sid}) si ya existía.
+        """
         WEB_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        path = WEB_SESSIONS_DIR / f"{web_session_id}.json"
+
+        custom_title = None
+        if path.exists():
+            try:
+                old = json.loads(path.read_text(encoding="utf-8"))
+                custom_title = old.get("title")
+            except Exception:
+                custom_title = None
+
+        transcript = [
+            {"role": h.get("role"), "text": h.get("content", "")}
+            for h in self.history[-TRANSCRIPT_MAX_TURNS:]
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant")
+        ]
+
         state = {
             "session_id": self.session_id,
             "history": self.history,
@@ -328,8 +524,15 @@ class AteneoChat:
             "current_topic": self.current_topic,
             "last_mode": self._last_mode,
             "method": self._method,
+            "course": self._last_course,
+            "unit": self._last_unit,
+            "difficulty": self._last_difficulty,
+            "options": self._last_options,
+            "transcript": transcript,
+            "updated_at": datetime.now().isoformat(),
         }
-        path = WEB_SESSIONS_DIR / f"{web_session_id}.json"
+        if custom_title:
+            state["title"] = custom_title
         path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
@@ -349,6 +552,10 @@ class AteneoChat:
             obj.current_topic = state.get("current_topic", "")
             obj._last_mode = state.get("last_mode", None)
             obj._method = state.get("method", None)
+            obj._last_course = state.get("course", None)
+            obj._last_unit = state.get("unit", None)
+            obj._last_difficulty = state.get("difficulty", "practicando")
+            obj._last_options = state.get("options", None)
             return obj
         except Exception:
             return None

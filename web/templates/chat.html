@@ -16,6 +16,7 @@
         <option value="evaluando">📝 Evaluando</option>
         <option value="desafiando">🔥 Desafiando</option>
       </select>
+      <button class="btn btn-secondary btn-sm" onclick="openHistory()">🕘 Historial</button>
       <button class="btn btn-secondary btn-sm" onclick="newChat()">Nueva sesión</button>
     </div>
   </div>
@@ -27,6 +28,21 @@
     <button id="send-btn" class="btn btn-primary btn-sm" onclick="sendMessage()" disabled>Enviar</button>
   </div>
 
+</div>
+
+<!-- Panel: Historial de sesiones -->
+<div id="history-overlay" class="modal-overlay preview-overlay" style="display:none" onclick="if(event.target===this)closeHistory()">
+  <div class="preview-panel history-panel">
+    <div class="preview-head">
+      <h3>🕘 Historial de sesiones</h3>
+      <div class="preview-head-actions">
+        <button class="btn btn-secondary btn-sm" onclick="closeHistory()">✕ Cerrar</button>
+      </div>
+    </div>
+    <div class="preview-body" id="history-body">
+      <p class="units-hint">Cargando historial…</p>
+    </div>
+  </div>
 </div>
 {% endblock %}
 

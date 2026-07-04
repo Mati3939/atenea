@@ -5,7 +5,7 @@
 <div class="demo-shell">
   <header class="demo-header">
     <h1 class="demo-title">Tour guiado</h1>
-    <span class="demo-step-label" id="demo-step-label">Paso 1 de 4</span>
+    <span class="demo-step-label" id="demo-step-label">Paso 1 de 7</span>
   </header>
 
   <!-- Slides container -->
@@ -17,39 +17,144 @@
         <div class="demo-slide-icon">🦉</div>
         <h2 class="demo-slide-title">Bienvenido a Atenea</h2>
         <p class="demo-slide-caption">
-          Atenea es tu asistente de estudio universitario con IA. Conecta tu cuenta de
-          <strong>Canvas LMS</strong>, sube tus apuntes y chatea con un tutor socrático que
-          te guía hacia las respuestas <em>sin dártelas directamente</em>.
+          Atenea es tu tutora de estudio universitaria con IA. Conecta tu cuenta de
+          <strong>Canvas LMS</strong>, organiza tu material en un gestor de archivos,
+          chatea con un <strong>chatbot socrático</strong> que te guía hacia las respuestas
+          <em>sin dártelas directamente</em>, planifica tu semana con un
+          <strong>calendario inteligente</strong> y aplica <strong>métodos de estudio</strong>
+          respaldados por la ciencia.
         </p>
         <ul class="demo-feature-list">
-          <li>📥 Descarga automática de material desde Canvas</li>
-          <li>🔍 Base de conocimiento vectorial sobre tus documentos</li>
-          <li>💬 Chat socrático con ejercicios adaptativos</li>
-          <li>📅 Calendario de estudio y técnicas de memoria</li>
+          <li>🔐 Login con tu cuenta de Canvas — sync automático</li>
+          <li>📁 Gestor de archivos organizado por curso</li>
+          <li>💬 Chat socrático con ejercicios adaptativos y LaTeX</li>
+          <li>📅 Calendario inteligente con planes de estudio generados por IA</li>
+          <li>🧠 Métodos de estudio + Pomodoro integrado</li>
         </ul>
       </div>
     </div>
 
-    <!-- Slide 1: Chat simulado -->
+    <!-- Slide 1: Login con Canvas -->
     <div class="demo-slide" data-slide="1">
+      <div class="card demo-card">
+        <h2 class="demo-slide-title">Conecta tu cuenta de Canvas</h2>
+        <p class="demo-slide-caption-sm">
+          Pegas tu URL y token de Canvas una sola vez — tu token se guarda solo en tu computador
+          y Atenea sincroniza tus cursos en segundo plano.
+        </p>
+        <div class="demo-login-wrap">
+          <div class="login-card card demo-login-card">
+            <div class="login-logo">
+              <div class="logo-circle">A</div>
+              <div>
+                <div class="logo-title">Atenea</div>
+                <div class="logo-sub">Asistente de Estudio</div>
+              </div>
+            </div>
+            <h1 class="login-title">Conecta tu cuenta de Canvas</h1>
+            <div class="login-form">
+              <label class="login-label">URL de Canvas</label>
+              <input class="login-input" type="text" value="https://udd.instructure.com" readonly tabindex="-1">
+              <label class="login-label">Token de acceso</label>
+              <div class="login-token-wrap">
+                <input class="login-input" type="password" value="••••••••••••••••" readonly tabindex="-1">
+                <button type="button" class="login-toggle" tabindex="-1">👁</button>
+              </div>
+              <button type="button" class="btn btn-primary login-submit" tabindex="-1" disabled>Conectar</button>
+            </div>
+            <div class="demo-login-status" id="demo-login-status">
+              <span class="demo-login-spinner" id="demo-login-spinner"></span>
+              <span id="demo-login-text">Conectando…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 2: Chat simulado -->
+    <div class="demo-slide" data-slide="2">
       <div class="card demo-card demo-chat-card">
         <h2 class="demo-slide-title">Chat socrático en acción</h2>
         <p class="demo-slide-caption-sm">
-          Avanza para ver la conversación paso a paso.
+          Ramo → unidad → método de estudio, y luego a conversar. Avanza para ver la conversación paso a paso.
         </p>
+        <div class="demo-flow">
+          <span class="demo-flow-chip">📘 Cálculo II</span>
+          <span class="demo-flow-arrow">→</span>
+          <span class="demo-flow-chip">Unidad 2: Derivadas</span>
+          <span class="demo-flow-arrow">→</span>
+          <span class="demo-flow-chip">🧠 Método Feynman</span>
+        </div>
         <div class="demo-messages" id="demo-messages"></div>
         <div class="quick-replies" id="demo-qr" style="display:none"></div>
       </div>
     </div>
 
-    <!-- Slide 2: Calendario -->
-    <div class="demo-slide" data-slide="2">
+    <!-- Slide 3: Gestor de archivos -->
+    <div class="demo-slide" data-slide="3">
       <div class="card demo-card">
-        <h2 class="demo-slide-title">Organización y Calendario</h2>
-        <p class="demo-slide-caption">
-          Visualiza tus pruebas y horas de estudio sugeridas en un calendario mensual.
-          Atenea detecta tus materias y crea bloques de repaso con anticipación.
+        <h2 class="demo-slide-title">Gestor de archivos</h2>
+        <p class="demo-slide-caption-sm">
+          Todo el material de tus cursos, descargado desde Canvas y organizado en carpetas.
         </p>
+        <div class="files-grid files-grid-root demo-files-courses">
+          <div class="file-item course-card">
+            <div class="file-icon">📘</div>
+            <div class="file-name">Cálculo II</div>
+            <div class="file-meta">18 archivos</div>
+          </div>
+          <div class="file-item course-card">
+            <div class="file-icon">⚛️</div>
+            <div class="file-name">Física General</div>
+            <div class="file-meta">12 archivos</div>
+          </div>
+          <div class="file-item course-card">
+            <div class="file-icon">💻</div>
+            <div class="file-name">Programación</div>
+            <div class="file-meta">9 archivos</div>
+          </div>
+        </div>
+        <div class="demo-files-divider">📘 Cálculo II</div>
+        <div class="files-grid demo-files-list">
+          <div class="file-item">
+            <div class="file-icon">📄</div>
+            <div class="file-name">Guía_Derivadas.pdf</div>
+            <div class="file-meta">PDF · 2.1 MB</div>
+          </div>
+          <div class="file-item" id="demo-drag-tile">
+            <div class="file-icon">📊</div>
+            <div class="file-name">Clase_03_Integrales.pptx</div>
+            <div class="file-meta">PPTX · 5.4 MB</div>
+          </div>
+          <div class="file-item">
+            <div class="file-icon">💻</div>
+            <div class="file-name">tarea_series.py</div>
+            <div class="file-meta">Código · 3 KB</div>
+          </div>
+          <div class="file-item file-item-up" id="demo-folder-tile">
+            <div class="file-icon">📁</div>
+            <div class="file-name">Unidad 3</div>
+            <div class="file-meta">Carpeta</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 4: Calendario inteligente -->
+    <div class="demo-slide" data-slide="4">
+      <div class="card demo-card">
+        <h2 class="demo-slide-title">Calendario inteligente</h2>
+        <p class="demo-slide-caption-sm">
+          Cuéntale a Atenea tu próxima evaluación en lenguaje natural y arma un plan de estudio automáticamente.
+        </p>
+        <div class="agenda-nl-card demo-nl-mock">
+          <div class="org-card-head"><h2 style="margin:0;font-size:.95rem">🪄 Dile a Atenea</h2></div>
+          <div class="agenda-nl-row">
+            <input type="text" id="demo-nl-input" readonly tabindex="-1" placeholder="Escribe tu evaluación…">
+            <button class="btn btn-primary btn-sm" tabindex="-1" disabled>Agendar</button>
+          </div>
+          <div class="nl-status" id="demo-nl-status" style="display:none">✓ Plan creado — editable</div>
+        </div>
         <div class="demo-calendar">
           <div class="demo-cal-header">
             <span>◀</span><span>Junio 2026</span><span>▶</span>
@@ -82,11 +187,11 @@
             <div class="demo-cal-day event-study">16<span class="cal-ev">📚 Repaso</span></div>
             <div class="demo-cal-day">17</div>
             <div class="demo-cal-day event-exam">18<span class="cal-ev">✏️ Prueba 1</span></div>
-            <div class="demo-cal-day">19</div>
-            <div class="demo-cal-day">20</div>
-            <div class="demo-cal-day">21</div>
-            <div class="demo-cal-day event-study">22<span class="cal-ev">📚 Estudio</span></div>
-            <div class="demo-cal-day">23</div>
+            <div class="demo-cal-day event-study demo-cal-reveal">19<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day event-study demo-cal-reveal">20<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day event-study demo-cal-reveal">21<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day event-study demo-cal-reveal">22<span class="cal-ev">📚 Estudio</span></div>
+            <div class="demo-cal-day event-pin demo-cal-reveal">23<span class="cal-ev cal-ev-pin">📌 Control Integrales</span></div>
             <div class="demo-cal-day">24</div>
             <div class="demo-cal-day">25</div>
             <div class="demo-cal-day">26</div>
@@ -100,12 +205,13 @@
       </div>
     </div>
 
-    <!-- Slide 3: Métodos -->
-    <div class="demo-slide" data-slide="3">
+    <!-- Slide 5: Métodos de estudio + Pomodoro -->
+    <div class="demo-slide" data-slide="5">
       <div class="card demo-card">
         <h2 class="demo-slide-title">Métodos de Estudio</h2>
         <p class="demo-slide-caption">
-          Atenea te enseña las técnicas de aprendizaje más efectivas respaldadas por la ciencia.
+          Atenea te enseña las técnicas de aprendizaje más efectivas respaldadas por la ciencia,
+          con un temporizador Pomodoro integrado para mantener el enfoque.
         </p>
         <div class="demo-methods-grid">
           <div class="demo-method-card">
@@ -124,7 +230,40 @@
             <div class="demo-method-desc">Explica el concepto como si se lo enseñaras a un niño. Lo que no puedes explicar, no lo entiendes aún.</div>
           </div>
         </div>
+        <div class="demo-pomodoro-mock-wrap">
+          <div class="pomodoro-widget demo-pomodoro-widget">
+            <div class="pomodoro-widget-head">
+              <span class="pomodoro-widget-phase">🍅 Foco</span>
+              <button class="pomodoro-widget-close" tabindex="-1">✕</button>
+            </div>
+            <div class="pomodoro-widget-time" id="demo-pomodoro-time">25:00</div>
+            <div class="pomodoro-widget-actions">
+              <button type="button" class="pomodoro-widget-btn" tabindex="-1">⏸</button>
+              <button type="button" class="pomodoro-widget-btn" tabindex="-1">↺</button>
+            </div>
+            <div class="pomodoro-widget-count">Pomodoros completados: 0</div>
+          </div>
+        </div>
         <a href="/metodos" class="btn btn-secondary btn-sm demo-cta">Explorar todos los métodos →</a>
+      </div>
+    </div>
+
+    <!-- Slide 6: Cierre -->
+    <div class="demo-slide" data-slide="6">
+      <div class="card demo-card">
+        <div class="demo-slide-icon">🦉</div>
+        <h2 class="demo-slide-title">Atenea — estudia mejor, no más</h2>
+        <p class="demo-slide-caption">
+          Conecta tu Canvas, organiza tu material, chatea con una tutora socrática, planifica tu
+          semana con IA y aplica métodos de estudio validados — todo en un solo lugar.
+        </p>
+        <ul class="demo-feature-list">
+          <li>🔐 Login con Canvas en segundos</li>
+          <li>📁 Gestor de archivos organizado por curso</li>
+          <li>💬 Chatbot RAG con pedagogía socrática</li>
+          <li>📅 Calendario inteligente con planes de estudio</li>
+          <li>🧠 Métodos de estudio + Pomodoro integrado</li>
+        </ul>
       </div>
     </div>
 

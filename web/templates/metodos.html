@@ -7,6 +7,38 @@
   <p class="subtitle">Técnicas probadas para estudiar mejor. Atenea recomienda las más adecuadas según tus ramos.</p>
 </div>
 
+<!-- Pomodoro: panel fijo, siempre visible en esta página -->
+<div class="card card-wide pomodoro-fixed-panel" id="pomodoro-fixed-panel">
+  <div class="org-card-head">
+    <h2>🍅 Temporizador Pomodoro</h2>
+  </div>
+  <p style="font-size:.875rem;color:var(--text-light);margin-bottom:.9rem">
+    Trabaja en bloques de foco y descanso. Sigue corriendo aunque cambies de página.
+  </p>
+  <div class="pomodoro-fixed-body">
+    <div class="pomodoro-fixed-display-wrap">
+      <div class="pomodoro-fixed-phase" id="pomodoro-phase">🍅 Foco</div>
+      <div class="pomodoro-fixed-display" id="pomodoro-display">25:00</div>
+      <div class="pomodoro-fixed-count" id="pomodoro-count">Pomodoros completados: 0</div>
+    </div>
+    <div class="pomodoro-fixed-controls">
+      <div class="pomodoro-fixed-inputs">
+        <label>Foco (min)
+          <input type="number" id="pomodoro-focus-min" min="1" max="120" value="25">
+        </label>
+        <label>Descanso (min)
+          <input type="number" id="pomodoro-break-min" min="1" max="60" value="5">
+        </label>
+      </div>
+      <div class="pomodoro-fixed-buttons">
+        <button class="btn btn-primary btn-sm" id="pomodoro-start-btn">▶ Iniciar</button>
+        <button class="btn btn-secondary btn-sm" id="pomodoro-pause-btn" style="display:none">⏸ Pausar</button>
+        <button class="btn btn-secondary btn-sm" id="pomodoro-reset-btn" disabled>↺ Reiniciar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Recomendados -->
 <div class="card card-wide" id="recommended-section" style="display:none">
   <div class="org-card-head">
@@ -35,12 +67,20 @@
 <div id="method-detail" class="card card-wide method-detail-panel" style="display:none">
   <div class="org-card-head">
     <h2 id="detail-title"></h2>
-    <button class="btn btn-secondary btn-sm" onclick="closeDetail()">✕ Cerrar</button>
+    <div style="display:flex; gap:.5rem;">
+      <button class="btn btn-primary btn-sm" id="detail-try-btn">▶ Probar este método</button>
+      <button class="btn btn-secondary btn-sm" onclick="closeDetail()">✕ Cerrar</button>
+    </div>
   </div>
   <p id="detail-what" style="font-size:.9rem;line-height:1.75;color:var(--text);margin:.5rem 0 1rem"></p>
   <h3 style="font-size:.9rem;font-weight:700;margin-bottom:.5rem;color:var(--text)">Cómo aplicarlo</h3>
   <ol id="detail-steps" class="method-steps"></ol>
   <div id="detail-tags" class="method-tags" style="margin-top:1rem"></div>
+  <div id="detail-pomodoro-link" style="display:none;margin-top:1.25rem">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('pomodoro-fixed-panel').scrollIntoView({behavior:'smooth',block:'start'})">
+      ⏱ Ir al temporizador Pomodoro de esta página
+    </button>
+  </div>
 </div>
 {% endblock %}
 

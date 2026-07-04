@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Iniciar sesión — Atenea</title>
+
+  <!-- Fonts: async, non-render-blocking -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        media="print" onload="this.media='all'">
+  <noscript>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  </noscript>
+
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <div class="login-shell">
+    <div class="login-card card">
+      <div class="login-logo">
+        <div class="logo-circle">A</div>
+        <div>
+          <div class="logo-title">Atenea</div>
+          <div class="logo-sub">Asistente de Estudio</div>
+        </div>
+      </div>
+
+      <h1 class="login-title">Conecta tu cuenta de Canvas</h1>
+      <p class="login-subtitle">
+        Atenea usa tu cuenta de Canvas LMS para descargar tus cursos y armar tu
+        base de conocimiento. Tu token se guarda solo en este computador.
+      </p>
+
+      <form id="login-form" class="login-form" autocomplete="off">
+        <label class="login-label" for="canvas-url">URL de Canvas</label>
+        <input
+          type="text"
+          id="canvas-url"
+          name="canvas_url"
+          class="login-input"
+          value="{{ canvas_url }}"
+          placeholder="https://udd.instructure.com"
+          autocomplete="off"
+        >
+
+        <label class="login-label" for="token">Token de acceso</label>
+        <div class="login-token-wrap">
+          <input
+            type="password"
+            id="token"
+            name="token"
+            class="login-input"
+            placeholder="Pega aquí tu token de Canvas"
+            autocomplete="new-password"
+          >
+          <button type="button" id="toggle-token" class="login-toggle" title="Mostrar/ocultar token">👁</button>
+        </div>
+        <p class="login-hint">
+          Canvas → Cuenta → Configuración → Integraciones aprobadas → Nuevo token de acceso
+        </p>
+
+        <div id="login-error" class="login-error"></div>
+
+        <button type="submit" id="login-submit" class="btn btn-primary login-submit">
+          Conectar
+        </button>
+      </form>
+
+      <div id="existing-session" class="login-existing">
+        <div class="login-divider"><span>o</span></div>
+        <button type="button" id="existing-btn" class="btn btn-secondary login-existing-btn">
+          Continuar como <strong id="existing-name">…</strong>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/login.js"></script>
+</body>
+</html>

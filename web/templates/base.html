@@ -24,6 +24,7 @@
   <script src="/static/vendor/marked.min.js"></script>
 
   <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/pomodoro.js"></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -38,6 +39,9 @@
       <a href="/"         class="nav-link {% if active_page == 'chat'     %}active{% endif %}">
         <span class="nav-icon">💬</span> Chat
       </a>
+      <a href="/archivos" class="nav-link {% if active_page == 'archivos' %}active{% endif %}">
+        <span class="nav-icon">📁</span> Archivos
+      </a>
       <a href="/organizacion" class="nav-link {% if active_page == 'organizacion' %}active{% endif %}">
         <span class="nav-icon">📅</span> Organización
       </a>
@@ -48,6 +52,11 @@
         <span class="nav-icon">🎬</span> Modo Demo
       </a>
     </nav>
+    <div class="sidebar-footer">
+      <a href="/logout" class="nav-link nav-logout">
+        <span class="nav-icon">🚪</span> Salir
+      </a>
+    </div>
   </aside>
   <main class="main">
     {% block content %}{% endblock %}

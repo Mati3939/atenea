@@ -132,6 +132,30 @@ function _updateMessage(wrap, text, record = true) {
   }
 }
 
+// Nota discreta bajo la burbuja cuando la respuesta vino de un modelo/proveedor
+// de reserva (cupo del principal agotado). No se guarda en el transcript: es
+// informativa para esta sesión en vivo, no parte de la conversación repintada.
+function _appendDegradedNote(wrap, provider) {
+  const note = document.createElement('div');
+  note.className = 'degraded-note';
+  note.textContent = provider === 'ollama'
+    ? '⚠️ Respuesta en modo reducido (se agotó el cupo del modelo principal) · modo local'
+    : '⚠️ Respuesta en modo reducido (se agotó el cupo del modelo principal)';
+  wrap.appendChild(note);
+}
+
+// Quick-reply fija que emite el agente cuando detecta un anuncio de evaluación
+// ("tengo control de X en una semana más"). En vez de enviarse como mensaje,
+// navega a Organización con el mensaje original precargado en 'Dile a Atenea'.
+const AGENDA_QUICK_REPLY = '📅 Abrir Organización';
+
+function _lastUserMessage() {
+  for (let i = _transcript.length - 1; i >= 0; i--) {
+    if (_transcript[i].role === 'user') return _transcript[i].text;
+  }
+  return '';
+}
+
 function appendOptions(options, handler = null) {
   clearOptions();
   if (!options || !options.length) return;
@@ -146,6 +170,11 @@ function appendOptions(options, handler = null) {
     btn.onclick = () => {
       clearOptions();
       _lastOptions = null;
+      if (!handler && opt === AGENDA_QUICK_REPLY) {
+        const original = _lastUserMessage();
+        window.location.href = '/organizacion?text=' + encodeURIComponent(original);
+        return;
+      }
       if (handler) handler(opt);
       else doSend(opt);
     };
@@ -612,10 +641,11 @@ async function _sendStreaming(text) {
   const reader = res.body.getReader();
   const dec    = new TextDecoder();
 
-  let buf = '', acc = '', finalData = null, renderQueued = false;
+  let buf = '', acc = '', finalData = null, renderQueued = false, finished = false;
 
   const renderPartial = () => {
     renderQueued = false;
+    if (finished) return; // el render final (con KaTeX) ya corrió; no lo pises
     bubble.innerHTML = _formatBot(acc) + '<span class="stream-cursor"></span>';
     messagesEl.scrollTop = messagesEl.scrollHeight;
   };
@@ -641,9 +671,11 @@ async function _sendStreaming(text) {
     }
   }
 
+  finished = true;
   wrap.classList.remove('streaming');
   if (finalData) {
     _updateMessage(wrap, finalData.text);
+    if (finalData.degraded) _appendDegradedNote(wrap, finalData.provider);
     if (finalData.options) appendOptions(finalData.options);
   } else if (acc) {
     _updateMessage(wrap, acc);
@@ -662,7 +694,8 @@ async function _sendBlocking(text) {
   });
   const data = await res.json();
   loading.remove();
-  appendMessage('assistant', data.error ? `❌ Error: ${data.error}` : data.response);
+  const wrap = appendMessage('assistant', data.error ? `❌ Error: ${data.error}` : data.response);
+  if (!data.error && data.degraded) _appendDegradedNote(wrap, data.provider);
   if (data.options) appendOptions(data.options);
 }
 
@@ -700,5 +733,245 @@ if (difficultyEl) {
   });
 }
 
+// ── "Probar este método" desde /metodos (?method=<key>&label=<nombre>) ────────
+// Arranca una sesión nueva y enfocada con el método ya preseleccionado, saltando
+// _chooseMethod (que solo se dispara cuando _selectedMethod es falsy).
+async function _initFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const methodParam = (params.get('method') || '').trim();
+  if (!methodParam) return false;
+
+  const labelParam = params.get('label');
+
+  // Limpia el query param sin recargar la página.
+  window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+
+  // Sesión nueva y limpia (equivalente al botón "Nueva sesión") para que el
+  // método aplique desde cero.
+  try { await fetch(`/api/session/${sessionId}`, { method: 'DELETE' }); } catch {}
+  try { localStorage.removeItem(_stateKey()); } catch {}
+  sessionId = _mkSessionId();
+  localStorage.setItem(SESSION_KEY, sessionId);
+
+  showGreeting(); // resetea _selectedMethod/_methodLabel — se fijan justo después
+
+  let label = labelParam || null;
+  if (!label) {
+    const methods = await _loadMethods();
+    const m = methods.find(x => x.key === methodParam);
+    if (m) label = m.name;
+  }
+  _selectedMethod = methodParam;
+  _methodLabel    = label || methodParam;
+
+  appendMessage('assistant', `🧠 Vamos a estudiar con el método **${_methodLabel}**. En cuanto elijamos el ramo y la unidad, lo aplicamos directamente.`);
+  return true;
+}
+
+// ── Historial de sesiones ────────────────────────────────────────────────────
+// Panel lateral (overlay derecha) con las sesiones guardadas en el servidor
+// (logs/web_sessions/<sid>.json vía GET/PUT/DELETE /api/sessions), agrupadas
+// por curso. Reutiliza el mismo patrón visual que archivos.html (modal-overlay
+// + preview-panel).
+
+function _relativeDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  if (diffMin < 1) return 'justo ahora';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `hace ${diffH} h`;
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfD = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startOfToday - startOfD) / 86400000);
+  if (diffDays === 1) return 'ayer';
+  if (diffDays >= 0 && diffDays < 7) return `hace ${diffDays} días`;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return d.getFullYear() === now.getFullYear() ? `${dd}/${mm}` : `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+async function openHistory() {
+  document.getElementById('history-overlay').style.display = 'flex';
+  await _loadHistoryPanel();
+}
+
+function closeHistory() {
+  document.getElementById('history-overlay').style.display = 'none';
+}
+
+async function _loadHistoryPanel() {
+  const body = document.getElementById('history-body');
+  body.innerHTML = '<p class="units-hint">Cargando historial…</p>';
+
+  let sessions = [];
+  try {
+    const data = await fetch('/api/sessions').then(r => r.json());
+    sessions = data.sessions || [];
+  } catch {
+    body.innerHTML = '<p class="units-hint">No se pudo cargar el historial.</p>';
+    return;
+  }
+
+  if (!sessions.length) {
+    body.innerHTML = '<p class="units-hint">Todavía no tienes sesiones guardadas. Aparecerán aquí después de tu primer mensaje.</p>';
+    return;
+  }
+
+  const groups = new Map();
+  sessions.forEach(s => {
+    const key = s.course_label || s.course || 'Sin curso';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  });
+
+  body.innerHTML = '';
+  let i = 0;
+  for (const [courseName, list] of groups.entries()) {
+    const det = document.createElement('details');
+    det.className = 'history-group';
+    det.open = i < 3; // primeros grupos abiertos por defecto
+    i++;
+
+    const sum = document.createElement('summary');
+    sum.className = 'history-group-title';
+    sum.textContent = `${courseName} (${list.length})`;
+    det.appendChild(sum);
+
+    const listEl = document.createElement('div');
+    listEl.className = 'history-list';
+    list.forEach(s => listEl.appendChild(_renderSessionItem(s)));
+    det.appendChild(listEl);
+
+    body.appendChild(det);
+  }
+}
+
+function _renderSessionItem(s) {
+  const row = document.createElement('div');
+  row.className = 'history-item' + (s.sid === sessionId ? ' active' : '');
+
+  const main = document.createElement('div');
+  main.className = 'history-item-main';
+  main.onclick = () => openHistorySession(s.sid);
+
+  const title = document.createElement('div');
+  title.className = 'history-item-title';
+  title.textContent = s.title;
+  main.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'history-item-meta';
+  const bits = [];
+  if (s.unit) bits.push(s.unit);
+  if (s.method) bits.push(s.method);
+  const rel = _relativeDate(s.updated_at);
+  if (rel) bits.push(rel);
+  meta.textContent = bits.join(' · ');
+  main.appendChild(meta);
+
+  row.appendChild(main);
+
+  const actions = document.createElement('div');
+  actions.className = 'history-item-actions';
+
+  const renameBtn = document.createElement('button');
+  renameBtn.className = 'history-item-btn';
+  renameBtn.title = 'Renombrar';
+  renameBtn.textContent = '✏️';
+  renameBtn.onclick = e => { e.stopPropagation(); _renameSession(s); };
+  actions.appendChild(renameBtn);
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'history-item-btn';
+  delBtn.title = 'Eliminar';
+  delBtn.textContent = '🗑️';
+  delBtn.onclick = e => { e.stopPropagation(); _deleteSession(s); };
+  actions.appendChild(delBtn);
+
+  row.appendChild(actions);
+  return row;
+}
+
+async function _renameSession(s) {
+  const newTitle = prompt('Nuevo nombre para la sesión:', s.title);
+  if (newTitle === null) return;
+  const trimmed = newTitle.trim();
+  if (!trimmed) return;
+  try {
+    await fetch(`/api/sessions/${s.sid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmed }),
+    });
+  } catch {}
+  _loadHistoryPanel();
+}
+
+async function _deleteSession(s) {
+  if (!confirm(`¿Eliminar la sesión "${s.title}"? Esta acción no se puede deshacer.`)) return;
+  try {
+    await fetch(`/api/sessions/${s.sid}`, { method: 'DELETE' });
+  } catch {}
+  try { localStorage.removeItem('atenea_chat_' + s.sid); } catch {}
+  _loadHistoryPanel();
+}
+
+async function openHistorySession(sid) {
+  if (sid === sessionId && _flowState === 'chatting') { closeHistory(); return; }
+
+  let data;
+  try {
+    data = await fetch(`/api/sessions/${sid}`).then(r => r.json());
+  } catch {
+    alert('No se pudo abrir la sesión.');
+    return;
+  }
+  if (data.error || !data.transcript || !data.transcript.length) {
+    alert('Esa sesión ya no tiene mensajes para mostrar.');
+    return;
+  }
+
+  sessionId = sid;
+  localStorage.setItem(SESSION_KEY, sessionId);
+
+  _activeCourse      = data.course || null;
+  _activeCourseLabel = data.course_label || data.course || null;
+  _activeUnit        = data.unit || null;
+  _selectedMode      = data.mode || null;
+  _selectedMethod    = data.method || null;
+  _methodLabel       = null;
+  if (_selectedMethod) {
+    try {
+      const methods = await _loadMethods();
+      const m = methods.find(x => x.key === _selectedMethod);
+      _methodLabel = m ? m.name : null;
+    } catch {}
+  }
+  _activeDifficulty  = 'practicando';
+  _transcript        = data.transcript;
+  _lastOptions       = data.options || null;
+  _flowState         = 'chatting';
+
+  closeHistory();
+  if (difficultyEl) difficultyEl.value = _activeDifficulty;
+  _updateBadge();
+
+  _recording = false;
+  messagesEl.innerHTML = '';
+  _transcript.forEach(m => appendMessage(m.role, m.text));
+  if (_lastOptions) appendOptions(_lastOptions);
+  _recording = true;
+
+  _setInputEnabled(true);
+  _persistState();
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
-if (!_restoreState()) showGreeting();
+(async () => {
+  const handledQuery = await _initFromQuery();
+  if (!handledQuery && !_restoreState()) showGreeting();
+})();

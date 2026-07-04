@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Archivos — Atenea{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Archivos</h1>
+  <p class="subtitle">Explora, organiza y previsualiza el material descargado de Canvas.</p>
+</div>
+
+<div class="files-toolbar">
+  <div class="files-breadcrumb-wrap">
+    <button class="btn btn-secondary btn-sm files-back-btn" id="files-back-btn" style="display:none" onclick="goUp()" title="Subir un nivel (Backspace)">⬆ Volver</button>
+    <div class="files-breadcrumb" id="files-breadcrumb"></div>
+  </div>
+  <div class="files-actions">
+    <button class="btn btn-secondary btn-sm" id="organize-undo-btn" style="display:none" onclick="undoOrganize()">↩ Deshacer orden</button>
+    <button class="btn btn-secondary btn-sm" id="organize-btn" style="display:none" onclick="openOrganizeModal()">🪄 Ordenar curso</button>
+    <button class="btn btn-secondary btn-sm" id="units-btn" style="display:none" onclick="openUnitsModal()">🧩 Unidades</button>
+    <button class="btn btn-secondary btn-sm" onclick="createFolder()">📁 Nueva carpeta</button>
+    <label class="btn btn-primary btn-sm files-upload-label">
+      ⬆️ Subir archivo
+      <input type="file" id="file-upload-input" multiple style="display:none" onchange="onUploadInputChange(event)">
+    </label>
+  </div>
+</div>
+
+<div class="files-dropzone" id="files-dropzone">
+  <div class="files-dropzone-hint" id="files-dropzone-hint">Suelta archivos aquí para subirlos a esta carpeta</div>
+  <div class="files-grid" id="files-grid"></div>
+  <div class="files-empty" id="files-empty" style="display:none">Esta carpeta está vacía.</div>
+</div>
+
+<!-- Modal: nueva carpeta -->
+<div id="mkdir-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeMkdirModal()">
+  <div class="modal-box">
+    <h3>📁 Nueva carpeta</h3>
+    <div class="modal-field">
+      <label>Nombre</label>
+      <input type="text" id="mkdir-name" placeholder="ej. Guías" onkeydown="if(event.key==='Enter')confirmMkdir()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary btn-sm" onclick="closeMkdirModal()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" onclick="confirmMkdir()">Crear</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: renombrar -->
+<div id="rename-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeRenameModal()">
+  <div class="modal-box">
+    <h3>✏️ Renombrar</h3>
+    <div class="modal-field">
+      <label>Nuevo nombre</label>
+      <input type="text" id="rename-name" onkeydown="if(event.key==='Enter')confirmRename()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary btn-sm" onclick="closeRenameModal()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" onclick="confirmRename()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panel de previsualización -->
+<div id="preview-overlay" class="modal-overlay preview-overlay" style="display:none" onclick="if(event.target===this)closePreview()">
+  <div class="preview-panel">
+    <div class="preview-head">
+      <h3 id="preview-title">Archivo</h3>
+      <div class="preview-head-actions">
+        <a id="preview-download" class="btn btn-secondary btn-sm" href="#" target="_blank" rel="noopener">⬇️ Descargar</a>
+        <button class="btn btn-secondary btn-sm" onclick="closePreview()">✕ Cerrar</button>
+      </div>
+    </div>
+    <div class="preview-body" id="preview-body">
+      <p class="preview-loading">Cargando…</p>
+    </div>
+  </div>
+</div>
+
+<!-- Panel: Unidades del curso -->
+<div id="units-overlay" class="modal-overlay preview-overlay" style="display:none" onclick="if(event.target===this)closeUnitsModal()">
+  <div class="preview-panel units-panel">
+    <div class="preview-head">
+      <h3 id="units-title">🧩 Unidades</h3>
+      <div class="preview-head-actions">
+        <button class="btn btn-secondary btn-sm" onclick="redetectUnits()">🔄 Redetectar</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeUnitsModal()">✕ Cerrar</button>
+      </div>
+    </div>
+    <div class="preview-body">
+      <p class="units-hint">
+        Estas son las unidades detectadas para el curso. Puedes renombrarlas, añadir o
+        eliminar, y ajustar sus temas. "Redetectar" vuelve a leer la calendarización desde
+        cero (respeta la calendarización elegida manualmente, si hay una).
+      </p>
+      <div id="units-list"></div>
+      <button class="btn btn-secondary btn-sm units-add-btn" onclick="addUnitRow()">+ Añadir unidad</button>
+    </div>
+    <div class="modal-actions units-panel-actions">
+      <span id="units-status" class="units-status"></span>
+      <button class="btn btn-primary btn-sm" onclick="saveUnits()">Guardar</button>
+    </div>
+  </div>
+</div>
+<!-- Panel: Plan de orden del curso -->
+<div id="organize-overlay" class="modal-overlay preview-overlay" style="display:none" onclick="if(event.target===this)closeOrganizeModal()">
+  <div class="preview-panel organize-panel">
+    <div class="preview-head">
+      <h3 id="organize-title">🪄 Ordenar curso</h3>
+      <div class="preview-head-actions">
+        <button class="btn btn-secondary btn-sm" onclick="closeOrganizeModal()">✕ Cerrar</button>
+      </div>
+    </div>
+    <div class="preview-body">
+      <p class="units-hint" id="organize-hint">
+        Este plan reorganiza los archivos del curso en carpetas por unidad y evaluaciones,
+        sin mover nada todavía. Revisa los destinos, desmarca lo que no quieras mover y aplica.
+      </p>
+      <div id="organize-summary" class="organize-summary"></div>
+      <div id="organize-list" class="organize-list"></div>
+    </div>
+    <div class="modal-actions units-panel-actions">
+      <span id="organize-status" class="units-status"></span>
+      <div style="display:flex; gap:.6rem;">
+        <button class="btn btn-secondary btn-sm" onclick="closeOrganizeModal()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" id="organize-apply-btn" onclick="applyOrganize()">Aplicar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/archivos.js"></script>
+{% endblock %}

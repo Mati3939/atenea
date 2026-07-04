@@ -5,7 +5,7 @@ import sys, io, json, re, time, traceback
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from dotenv import load_dotenv; load_dotenv()
 
-from chatbot.conversation import AteneoChat, _detect_intent, _is_correct
+from chatbot.conversation import AteneoChat, _detect_intent, _is_correct, _is_agenda_request
 from chatbot.latex import normalize_latex
 from chatbot.prompts import build_system_prompt
 
@@ -57,6 +57,27 @@ intent_cases = [
 for i,(msg,exp) in enumerate(intent_cases, 1):
     got = _detect_intent(msg)
     record(f"A{i}", "intent", f'"{msg}" -> {got}', got==exp,
+           "" if got==exp else f"esperado {exp}")
+
+# ════════════════════════════════════════════════════════════════════════════
+# BLOQUE AG — Deterministas: detección de anuncio de evaluación (agenda)
+# ════════════════════════════════════════════════════════════════════════════
+# Feedback: "tengo certamen pronto" no matcheaba porque la alternancia temporal
+# solo cubría fechas explícitas (mañana, en N días, próximo lunes...) y no
+# menciones coloquiales de urgencia ("pronto", "se acerca", "esta semana"...).
+agenda_cases = [
+    ("tengo certamen pronto", True),
+    ("tengo un control que se acerca", True),
+    ("tengo prueba esta semana", True),
+    ("tengo control de integrales en una semana más", True),   # caso original (no debe romperse)
+    ("tuve un certamen ayer", False),                # pasado, no "tengo" + futuro
+    ("no entiendo el control de flujo", False),       # sin "tengo" + evaluación
+    ("¿qué es un examen de hipótesis?", False),       # pregunta conceptual, sin anuncio
+    ("tengo dudas del certamen pasado", False),       # "tengo" + evaluación pero sin mención futura
+]
+for i,(msg,exp) in enumerate(agenda_cases, 1):
+    got = _is_agenda_request(msg)
+    record(f"AG{i}", "agenda-regex", f'"{msg}" -> {got}', got==exp,
            "" if got==exp else f"esperado {exp}")
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -122,6 +143,18 @@ for i,m in enumerate(METHODS, 1):
 # ════════════════════════════════════════════════════════════════════════════
 COURSE = "C_LCULO_INTEGRAL"
 UNIT = "Integrales"
+
+# Pacing opcional entre llamadas live para no chocar el TPM del free tier de Groq
+# (EVAL_PACE_S=<segundos>; útil con GROQ_MODEL=llama-3.1-8b-instant, TPM 6k).
+import os as _os
+_PACE_S = float(_os.environ.get("EVAL_PACE_S", "0") or 0)
+if _PACE_S:
+    from chatbot import llm as _llm
+    _orig_complete = _llm.complete
+    def _paced_complete(messages, temperature=0.4):
+        time.sleep(_PACE_S)
+        return _orig_complete(messages, temperature)
+    _llm.complete = _paced_complete
 
 def live(desc):
     """decorador-ligero: corre y captura excepción"""
@@ -258,6 +291,120 @@ try:
     record("F12", "edge", "'no sé' manejado", len(r["text"])>20, f"state={c.exercise_state} | {r['text'][:80]!r}")
 except Exception as e:
     record("F12", "edge", "no sé", False, f"EXC {e}")
+
+# ════════════════════════════════════════════════════════════════════════════
+# BLOQUE G — Fidelidad al ramo (curso activo no debe filtrarse a otra disciplina)
+# ════════════════════════════════════════════════════════════════════════════
+# BUG reportado: en ÁLGEBRA LINEAL, unidad "Repaso y Evaluación", "el ejercicio
+# más difícil" generó un ejercicio de INTEGRALES (cálculo). build_system_prompt
+# nunca recibía el curso, y las unidades de repaso no tenían manejo especial.
+COURSE_ALGEBRA = "LGEBRA_LINEAL"          # safe_name de "ÁLGEBRA LINEAL"
+COURSE_CALCULO = "C_LCULO_INTEGRAL"       # safe_name de "CÁLCULO INTEGRAL"
+COURSE_TALLER  = "TALLER_DE_ESTRUCTURA_DE_DATOS_Y_ALGORITMOS"
+UNIT_REPASO    = "Unidad 9 — Repaso y Evaluación"
+
+_ALGEBRA_SIGNS_RE = re.compile(
+    r"matri|vector|determinante|autovalor|autovector|transformaci[oó]n lineal"
+    r"|sistema.{0,20}ecuacion|espacio vectorial|diagonaliza|base\b|rango",
+    re.IGNORECASE,
+)
+_CALC_SIGNS_RE = re.compile(r"\\int|integral|deriva", re.IGNORECASE)
+_PROG_SIGNS_RE = re.compile(
+    r"lista|[aá]rbol|pila\b|cola\b|grafo|complejidad|algoritmo|nodo|hash|recursi",
+    re.IGNORECASE,
+)
+
+# ── G-det: build_system_prompt debe reflejar curso/temas/unidad de repaso ─────
+try:
+    p = build_system_prompt(course="ÁLGEBRA LINEAL")
+    ok = "ÁLGEBRA LINEAL" in p and any(w in p.lower() for w in ["pertenec", "disciplina"])
+    record("Gdet-a", "fidelidad-ramo", "prompt incluye curso activo + pertenencia", ok, p[-260:])
+except Exception as e:
+    record("Gdet-a", "fidelidad-ramo", "prompt incluye curso activo", False, f"EXC {e}")
+
+try:
+    p = build_system_prompt(topics=["matrices", "determinantes"])
+    ok = "matrices" in p.lower() and "determinantes" in p.lower()
+    record("Gdet-b", "fidelidad-ramo", "prompt incluye topics de la unidad", ok, p[-200:])
+except Exception as e:
+    record("Gdet-b", "fidelidad-ramo", "prompt incluye topics", False, f"EXC {e}")
+
+try:
+    p = build_system_prompt(unit=UNIT_REPASO)
+    ok = bool(re.search(r"repaso", p, re.IGNORECASE)) and bool(
+        re.search(r"cubr\w+.{0,40}curso", p, re.IGNORECASE)
+    )
+    record("Gdet-c", "fidelidad-ramo", "unidad repaso -> variante todo el curso", ok, p[-260:])
+except Exception as e:
+    record("Gdet-c", "fidelidad-ramo", "unidad repaso -> variante", False, f"EXC {e}")
+
+try:
+    p = build_system_prompt(topics=["(A1) Lineal.pdf", "matrices"])
+    ok = "(A1) Lineal.pdf" not in p and "matrices" in p.lower()
+    record("Gdet-d", "fidelidad-ramo", "filtra topics tipo nombre de archivo", ok, p[-200:])
+except Exception as e:
+    record("Gdet-d", "fidelidad-ramo", "filtra topics archivo", False, f"EXC {e}")
+
+
+# ── G-live: comportamiento real del agente con curso activo ───────────────────
+# Groq free tier limita los tokens/minuto; el bloque F ya consume buena parte
+# del cupo, así que se espera entre casos (salvo que EVAL_PACE_S ya pause cada
+# llamada globalmente).
+def _pause(seconds=20):
+    if not _PACE_S:
+        time.sleep(seconds)
+
+_pause(30)
+
+# G1: ÁLGEBRA LINEAL + unidad de repaso + "el ejercicio más difícil" -> señales de álgebra lineal
+try:
+    c = fresh()
+    r = c.chat("Quiero el ejercicio más difícil", course=COURSE_ALGEBRA, unit=UNIT_REPASO,
+               mode="ejercitar", difficulty="desafiando")
+    txt = r["text"]
+    ok = bool(_ALGEBRA_SIGNS_RE.search(txt)) and not bool(_CALC_SIGNS_RE.search(txt))
+    record("G1", "fidelidad-ramo", "repaso álgebra lineal -> ejercicio del ramo", ok,
+           f"alg={bool(_ALGEBRA_SIGNS_RE.search(txt))} calc={bool(_CALC_SIGNS_RE.search(txt))} | {txt[:120]!r}")
+except Exception as e:
+    record("G1", "fidelidad-ramo", "repaso algebra lineal", False, f"EXC {e}")
+_pause()
+
+# G2: CÁLCULO INTEGRAL -> sigue requiriendo integración (no romper lo que funciona)
+try:
+    c = fresh()
+    r = c.chat("Dame un ejercicio", course=COURSE_CALCULO, unit="Integrales", mode="ejercitar")
+    txt = r["text"]
+    ok = bool(_CALC_SIGNS_RE.search(txt))
+    record("G2", "fidelidad-ramo", "cálculo integral sigue pidiendo integración", ok, txt[:120])
+except Exception as e:
+    record("G2", "fidelidad-ramo", "calculo integral", False, f"EXC {e}")
+_pause()
+
+# G3: TALLER DE ESTRUCTURA DE DATOS Y ALGORITMOS -> señales de programación
+try:
+    c = fresh()
+    r = c.chat("Dame un ejercicio", course=COURSE_TALLER, unit="Estructuras de Datos", mode="ejercitar")
+    txt = r["text"]
+    ok = bool(_PROG_SIGNS_RE.search(txt)) and not bool(_CALC_SIGNS_RE.search(txt))
+    record("G3", "fidelidad-ramo", "taller EDA -> ejercicio de programación", ok,
+           f"prog={bool(_PROG_SIGNS_RE.search(txt))} calc={bool(_CALC_SIGNS_RE.search(txt))} | {txt[:120]!r}")
+except Exception as e:
+    record("G3", "fidelidad-ramo", "taller estructura de datos", False, f"EXC {e}")
+_pause()
+
+# G4: corrección en caliente -> el siguiente ejercicio SÍ es de álgebra lineal
+try:
+    c = fresh()
+    c.chat("Dame un ejercicio", course=COURSE_ALGEBRA, unit=UNIT_REPASO, mode="ejercitar")
+    r = c.chat("Eso no es de este ramo, dame un ejercicio de álgebra lineal por favor",
+               course=COURSE_ALGEBRA, unit=UNIT_REPASO, mode="ejercitar")
+    txt = r["text"]
+    ok = bool(_ALGEBRA_SIGNS_RE.search(txt)) and not bool(_CALC_SIGNS_RE.search(txt))
+    record("G4", "fidelidad-ramo", "corrección en caliente -> vuelve al ramo", ok,
+           f"alg={bool(_ALGEBRA_SIGNS_RE.search(txt))} calc={bool(_CALC_SIGNS_RE.search(txt))} | {txt[:120]!r}")
+except Exception as e:
+    record("G4", "fidelidad-ramo", "correccion en caliente", False, f"EXC {e}")
+
 
 # ── Resumen ───────────────────────────────────────────────────────────────────
 fails = [r for r in RESULTS if r["status"]=="FAIL"]

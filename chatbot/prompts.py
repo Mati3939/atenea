@@ -8,8 +8,8 @@ FORMATO MATEMÁTICO (OBLIGATORIO):
 - TODA expresión, símbolo, variable o fórmula matemática va entre signos de dólar.
 - En línea usa un dólar: $x^2 + 1$, $v = 3$, $\\alpha$. En bloque usa dos: $$\\int_0^1 x\\,dx$$.
 - PROHIBIDO usar \\[ \\], \\( \\) o corchetes [ ] para fórmulas. SOLO $ y $$.
-- Usa comandos LaTeX estándar: \\frac{a}{b}, \\sqrt{x}, x^{2}, x_{i}, \\sum, \\int, \\cdot, \\pi.
-- Ejemplos correctos: "La derivada de $x^2$ es $2x$." / "$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$".
+- Usa comandos LaTeX estándar: \\frac{a}{b}, \\sqrt{x}, x^{2}, x_{i}, \\sum, \\int, \\cdot, \\pi, \\det, \\vec{v}, \\begin{pmatrix}.
+- Ejemplos correctos de FORMATO (no de contenido): "La derivada de $x^2$ es $2x$." / "Si $\\det(A) \\neq 0$, la matriz $A$ es invertible." / "El vector $\\vec{v} = (1, -2)$" / "$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$".
 - Usa LaTeX SOLO para matemáticas reales. El texto normal, nombres y prosa van en texto plano sin dólares.
 
 USO DEL MATERIAL DEL CURSO:
@@ -20,6 +20,9 @@ USO DEL MATERIAL DEL CURSO:
 - El material a veces incluye soluciones (pautas). Al PLANTEAR un ejercicio, NO muestres ni copies su solución: escribe solo el enunciado.
 - No empieces tu respuesta continuando el material; responde directamente al estudiante.
 - Si el material no alcanza para responder, dilo y guía con lo que haya, sin inventar.
+
+AGENDA:
+- Si el estudiante anuncia una evaluación próxima con fecha o plazo (por ejemplo "tengo certamen la próxima semana", "tengo prueba pronto"), NO generes tú un plan de estudio completo en el chat: dile que puedes ayudarle a agendarla con un plan editable en la sección Organización ("Dile a Atenea") y ofrécele seguir estudiando el tema aquí mismo.
 
 MÉTODO:
 - Nunca des la respuesta de un ejercicio antes de que el estudiante lo intente al menos una vez.
@@ -87,6 +90,34 @@ _STATE_CONTEXT = {
 }
 
 
+# Unidades que no son un tema en sí ("Repaso y Evaluación", "Examen final"...):
+# se comparan sin tildes ni mayúsculas.
+import re as _re
+import unicodedata as _ud
+
+_REVIEW_UNIT_RE = _re.compile(r"repaso|evaluaci|examen|certamen|prueba")
+# Topics que en realidad son nombres de archivo (cache viejo de _units.json)
+_FILE_TOPIC_RE = _re.compile(r"\.(pdf|pptx|docx|txt|md)\s*$", _re.IGNORECASE)
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(ch for ch in _ud.normalize("NFD", s) if _ud.category(ch) != "Mn")
+
+
+def _is_review_unit(unit: str | None) -> bool:
+    if not unit:
+        return False
+    return bool(_REVIEW_UNIT_RE.search(_strip_accents(unit).lower()))
+
+
+def _clean_topics(topics: list[str] | None) -> list[str]:
+    """Filtra topics que parecen nombres de archivo (formato viejo del cache)."""
+    if not topics:
+        return []
+    return [t.strip() for t in topics
+            if t and t.strip() and not _FILE_TOPIC_RE.search(t.strip())]
+
+
 def _method_context(method: str | None) -> str:
     """Fragmento de prompt del método de estudio activo (desde study_methods)."""
     if not method:
@@ -104,8 +135,27 @@ def build_system_prompt(
     difficulty: str = "practicando",
     mode: str | None = None,
     method: str | None = None,
+    course: str | None = None,
+    topics: list[str] | None = None,
+    other_units: list[str] | None = None,
 ) -> str:
+    """Arma el prompt de sistema.
+
+    `course` es el nombre LEGIBLE del ramo (p. ej. "ÁLGEBRA LINEAL"): ancla la
+    disciplina de TODOS los ejercicios/ejemplos (fix del bug "ejercicio de
+    integrales en Álgebra Lineal"). `topics` son los temas de la unidad activa
+    (se filtran los que parezcan nombres de archivo, herencia del cache viejo).
+    `other_units` (nombres de las demás unidades) se usa cuando la unidad activa
+    es de repaso/evaluación, para indicar qué temas cubre el curso.
+    """
     prompt = SYSTEM_PROMPT_BASE
+    if course:
+        prompt += (
+            f"\n\nCURSO ACTIVO: '{course}'. Todos los ejercicios, ejemplos y "
+            "explicaciones deben pertenecer a la disciplina de este ramo. "
+            "NUNCA propongas ejercicios de otra disciplina (por ejemplo, nada de "
+            "integrales o derivadas si el ramo no es de cálculo)."
+        )
     if mode in _MODE_CONTEXT:
         prompt += _MODE_CONTEXT[mode]
     if state in _STATE_CONTEXT:
@@ -113,6 +163,24 @@ def build_system_prompt(
     if difficulty in _DIFFICULTY_CONTEXT:
         prompt += _DIFFICULTY_CONTEXT[difficulty]
     prompt += _method_context(method)
-    if unit:
-        prompt += f"\n\nUNIDAD ACTIVA: '{unit}'. Enfoca todos los ejercicios y explicaciones en este tema específico."
+
+    clean_topics = _clean_topics(topics)
+    if unit and _is_review_unit(unit):
+        prompt += (
+            f"\n\nUNIDAD DE REPASO: la unidad activa es '{unit}'. NO trates 'repaso' "
+            "como un tema: genera ejercicios que cubran los temas principales del curso"
+        )
+        if other_units:
+            listed = "; ".join(u for u in other_units if u)[:600]
+            prompt += f" (las otras unidades del curso son: {listed})"
+        prompt += ", variando el tema entre un ejercicio y el siguiente."
+    elif unit:
+        prompt += (
+            f"\n\nUNIDAD ACTIVA: '{unit}'. Enfoca todos los ejercicios y "
+            "explicaciones en este tema específico."
+        )
+        if clean_topics:
+            prompt += " Temas de la unidad: " + ", ".join(clean_topics[:12]) + "."
+    elif clean_topics:
+        prompt += "\n\nTemas de la unidad: " + ", ".join(clean_topics[:12]) + "."
     return prompt
