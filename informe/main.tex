@@ -1,0 +1,612 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds}
+
+\definecolor{atenea}{RGB}{0,92,150}
+\definecolor{ateneaclaro}{RGB}{225,240,248}
+\definecolor{ateneagris}{RGB}{90,90,90}
+
+\titleformat{\section}{\Large\bfseries\color{atenea}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{atenea}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{ateneagris}}{\thesubsubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small Proyecto Atenea --- Informe de Entrega Final}
+\fancyhead[R]{\small\thepage}
+
+\usepackage[colorlinks=true,linkcolor=atenea,urlcolor=atenea,citecolor=atenea]{hyperref}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\renewcommand{\arraystretch}{1.25}
+\setcounter{tocdepth}{2}
+
+\title{\vspace{-2cm}}
+\date{}
+
+\begin{document}
+
+% ---------------------------------------------------------------
+% PORTADA
+% ---------------------------------------------------------------
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+{\Huge\bfseries\color{atenea} Proyecto Atenea}\\[0.4cm]
+{\Large Tutor Inteligente para la Detecci\'on de Debilidades Acad\'emicas}\\[1.2cm]
+
+{\large\bfseries Informe Final del Proyecto}\\[0.2cm]
+{\normalsize Investigaci\'on, dise\~no, prototipado y desarrollo del producto}\\[2cm]
+
+\begin{tabular}{c}
+\textbf{Integrantes} \\[0.3cm]
+Mat\'ias Pino \\
+Esteban Medina \\
+Joaqu\'in Barrales \\
+Tom\'as Lecaros
+\end{tabular}
+
+\vspace{1.5cm}
+Ingenier\'ia Civil en Inform\'atica e Innovaci\'on Tecnol\'ogica\\
+Universidad del Desarrollo --- Concepci\'on
+
+\vspace{1.5cm}
+Fecha: 3 de julio de 2026
+
+\vfill
+{\small Video de demostraci\'on del prototipo funcional: \url{https://youtu.be/Z9xSjbl6z20}}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------
+\section{Introducci\'on}
+% ---------------------------------------------------------------
+
+El rendimiento acad\'emico universitario es un desaf\'io persistente para los estudiantes de educaci\'on superior en Chile: a pesar de invertir tiempo y esfuerzo en estudiar, una parte importante llega a los cert\'amenes con una falsa sensaci\'on de preparaci\'on. En paralelo, el uso masivo de herramientas de Inteligencia Artificial Generativa (ChatGPT, Gemini) se ha vuelto la respuesta por defecto de los estudiantes, pero mayoritariamente como atajo para obtener res\'umenes o respuestas inmediatas, en lugar de usarse como herramienta de entrenamiento activo.
+
+A partir de esta problem\'atica, identificada y validada mediante investigaci\'on de campo y de escritorio, este equipo dise\~n\'o y construy\'o \textbf{Atenea}: una plataforma web que conecta autom\'aticamente con Canvas LMS, organiza e indexa el material de los cursos del estudiante en una base de conocimiento vectorial, y ofrece un chatbot con pedagog\'ia socr\'atica que gu\'ia al estudiante hacia sus propias respuestas en lugar de entreg\'arselas, detectando adem\'as sus debilidades y recomend\'andole m\'etodos de estudio personalizados.
+
+Este informe documenta el proceso completo del taller: investigaci\'on y validaci\'on del problema, definici\'on del desaf\'io, s\'intesis de insights, ideaci\'on, propuesta de valor y modelo de negocio, definici\'on de la soluci\'on, planificaci\'on y ejecuci\'on iterativa del prototipado, y el estado funcional final del producto, incluyendo los casos de uso que pueden probarse hoy en la plataforma.
+
+La metodolog\'ia general sigue el proceso de Design Thinking en sus cuatro fases (\emph{investigar $\rightarrow$ definir $\rightarrow$ idear $\rightarrow$ prototipar}), utilizando en cada etapa las herramientas correspondientes: Persona, Jobs To Be Done (JTBD), Customer Journey Map (CJM), QQPF (Qu\'e / Qu\'e pasa / Por qu\'e / Fricci\'on), How Might We (HMW), ideaci\'on grupal (brainstorming y brainwriting), Business Model Canvas, historias de usuario con criterios de aceptaci\'on, y desarrollo de software iterativo con control de versiones.
+
+% ---------------------------------------------------------------
+\section{Investigaci\'on y Validaci\'on del Problema}
+% ---------------------------------------------------------------
+
+\subsection{Exploraci\'on inicial de problem\'aticas}
+
+El equipo parti\'o de un ejercicio de \emph{recopilaci\'on de problemas} sobre la ciudad de Concepci\'on, levantando m\'as de 40 problem\'aticas candidatas (seguridad, contaminaci\'on visual, movilidad, salud, educaci\'on, entre otras), agrup\'andolas en categor\'ias tem\'aticas. Dentro de la categor\'ia \emph{Educaci\'on}, el problema \textbf{``dificultad de los estudiantes para encontrar y aplicar m\'etodos de estudio efectivos''} se seleccion\'o por dos motivos: (1) afecta a una poblaci\'on amplia y accesible para investigar (estudiantes universitarios), y (2) las soluciones existentes basadas en IA generativa no se ajustan al contenido espec\'ifico de cada curso ni ofrecen personalizaci\'on real.
+
+\subsection{Preguntas de investigaci\'on}
+
+Se definieron las siguientes preguntas gu\'ia:
+\begin{itemize}[itemsep=1pt]
+\item \textquestiondown Qu\'e m\'etodos de estudio utilizan los alumnos universitarios en Concepci\'on?
+\item \textquestiondown Prueban distintos m\'etodos de estudio o se quedan con el primero que aprendieron?
+\item \textquestiondown Investigan m\'etodos de estudio por su cuenta? \textquestiondown Estar\'ian dispuestos a hacerlo si se les facilita?
+\item \textquestiondown Usan Inteligencia Artificial para estudiar? \textquestiondown De qu\'e forma, y es un uso efectivo?
+\item \textquestiondown Se condicen las horas de estudio invertidas con los resultados acad\'emicos obtenidos?
+\item \textquestiondown D\'onde o de qui\'en aprendieron a estudiar?
+\end{itemize}
+
+\subsection{Metodolog\'ia de investigaci\'on}
+
+\subsubsection{Investigaci\'on cuantitativa (primaria)}
+Se dise\~n\'o y aplic\'o una encuesta mediante Google Forms a \textbf{83 estudiantes universitarios} de distintas carreras e instituciones de Concepci\'on, indagando en h\'abitos de estudio, uso de Inteligencia Artificial, percepci\'on sobre m\'etodos de aprendizaje y dificultades acad\'emicas.
+
+\subsubsection{Investigaci\'on secundaria (de escritorio)}
+Se utiliz\'o Gemini Deep Research para construir un reporte t\'ecnico sobre estrategias de aprendizaje y autorregulaci\'on en la educaci\'on superior chilena, contrastando la literatura cient\'ifica (m\'as de 25 fuentes acad\'emicas e institucionales, ver secci\'on de Referencias) con la evidencia primaria recolectada por el equipo.
+
+\subsubsection{Herramientas de Design Thinking aplicadas}
+Persona, Customer Journey Map, Jobs To Be Done, Historias de Usuario, QQPF e ideaci\'on grupal (brainstorming + brainwriting).
+
+\subsection{Resultados de la investigaci\'on primaria}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}l Y@{}}
+\toprule
+\textbf{Hallazgo} & \textbf{Dato (encuesta, n=83)} \\
+\midrule
+Autonom\'ia & 75\% aprendi\'o a estudiar por cuenta propia, sin gu\'ia formal. \\
+M\'etodos pasivos & 77\% usa res\'umenes manuales como t\'ecnica principal; solo \textasciitilde10\% usa flashcards u otras t\'ecnicas activas. \\
+IA como atajo & M\'as del 90\% usa IA para estudiar, principalmente para obtener respuestas r\'apidas, no para entrenarse. \\
+Disposici\'on al cambio & 95\% est\'a dispuesto o abierto a probar nuevas herramientas o m\'etodos de estudio. \\
+Frustraci\'on & Satisfacci\'on promedio con m\'etodos actuales: 3.7/5; m\'as del 50\% nunca ha buscado activamente alternativas. \\
+\bottomrule
+\end{tabularx}
+\caption{Insights de usuario --- investigaci\'on primaria (encuesta propia, 83 estudiantes).}
+\end{table}
+
+\subsection{Resultados de la investigaci\'on secundaria}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}l Y@{}}
+\toprule
+\textbf{Hallazgo} & \textbf{Evidencia (fuentes secundarias)} \\
+\midrule
+IA superficial & 81\% de estudiantes de primer a\~no usa IA generativa, mayoritariamente para res\'umenes y respuestas inmediatas \cite{uchile81}. \\
+H\'abitos ineficaces & M\'as del 50\% carece de h\'abitos estrat\'egicos de estudio; el subrayado es la t\'ecnica m\'as usada pese a su baja utilidad cient\'ifica comprobada \cite{dialnet8083934}. \\
+Ilusi\'on de competencia & La fluidez de la IA genera una falsa sensaci\'on de dominio: la claridad del output no equivale a comprensi\'on real \cite{brunner2025}. \\
+Apoyo institucional ignorado & Programas como el CADE de la Universidad de Concepci\'on son usados mayoritariamente cuando el estudiante ya est\'a en riesgo de reprobar, no como herramienta preventiva \cite{cade}. \\
+Autorregulaci\'on & El rendimiento acad\'emico correlaciona m\'as fuertemente con la autorregulaci\'on del aprendizaje que con la inteligencia general del estudiante \cite{redalyc44074795017}. \\
+\bottomrule
+\end{tabularx}
+\caption{Insights de contexto --- investigaci\'on secundaria (literatura cient\'ifica e institucional).}
+\end{table}
+
+\subsection{Persona: Pablo S\'anchez}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}l Y@{}}
+\toprule
+Perfil & 20 a\~nos, Panguipulli, estudiante de Psicolog\'ia. Tiene TDAH desde la infancia. \\
+Contexto & En el colegio compensaba su TDAH estudiando a \'ultima hora y conectando contenidos con sus intereses (videojuegos). En la universidad esa estrategia dej\'o de funcionar: los contenidos son m\'as complejos y exigen constancia. Usa ChatGPT y Gemini con frecuencia. \\
+Objetivo & Estudiar de forma efectiva y constante sin sentirse abrumado. \\
+Dolores & Estr\'es constante; no saber por d\'onde empezar; miedo al fracaso; problemas de atenci\'on; sensaci\'on de ``chocar contra una pared''. \\
+Motivaciones & Avanzar en la carrera; sentirse capaz; encontrar m\'etodos din\'amicos, no tradicionales. \\
+Comportamiento & Procrastina; funciona mejor con est\'imulos cortos y din\'amicos; aprende mejor relacionando conceptos con algo entretenido; usa tecnolog\'ia sin problema. \\
+Frase t\'ipica & \emph{``No es que no quiera estudiar, es que no s\'e c\'omo hacerlo bien.''} \\
+\bottomrule
+\end{tabularx}
+\caption{S\'intesis del Persona utilizado como usuario tipo del proyecto.}
+\end{table}
+
+\subsection{Customer Journey Map}
+
+\begin{longtable}{@{}p{2.3cm} p{3.2cm} p{3.1cm} p{5.1cm}@{}}
+\toprule
+\textbf{Fase} & \textbf{Acciones} & \textbf{Emoci\'on} & \textbf{Oportunidad de digitalizaci\'on} \\
+\midrule
+\endhead
+1. Preparaci\'on para el certamen & Estudia leyendo, subrayando y repasando apuntes; es el m\'etodo que us\'o en el colegio. & Confianza inicial, tranquilidad. & Herramientas que eval\'uen comprensi\'on real (autoevaluaciones), plataformas de planificaci\'on de estudio. \\
+2. Durante el certamen & Llega, responde; no logra recordar ni relacionar conceptos ante preguntas nuevas. & Confusi\'on, ansiedad, inseguridad. & Simuladores de prueba tipo certamen, ejercicios pr\'acticos con retroalimentaci\'on inmediata. \\
+3. Despu\'es del certamen & Comenta la prueba con compa\~neros; percibe que estudi\'o mucho pero no rindi\'o bien. & Frustraci\'on, desmotivaci\'on, duda. & Herramientas de an\'alisis de desempe\~no que identifiquen debilidades espec\'ificas. \\
+4. Replanteamiento del m\'etodo & Busca nuevas formas de estudiar en internet y con compa\~neros. & Motivado, pero a\'un inseguro. & Rutas de aprendizaje guiadas, t\'ecnicas de repetici\'on espaciada y \emph{active recall}, sistemas que se adapten al rendimiento del usuario. \\
+\bottomrule
+\caption{Customer Journey Map de Pablo S\'anchez frente a un certamen universitario.}
+\end{longtable}
+
+\textbf{Oportunidad detectada:} ayudar a Pablo a identificar sus debilidades \emph{antes} del examen, mediante entrenamiento activo y retroalimentaci\'on personalizada, en lugar de que las descubra reci\'en durante o despu\'es de la evaluaci\'on.
+
+\subsection{Insights consolidados}
+
+\begin{enumerate}[itemsep=1pt]
+\item Los estudiantes confunden familiaridad con el material con dominio real del contenido.
+\item Muchos descubren sus debilidades reci\'en durante el certamen, cuando ya es tarde para corregirlas.
+\item La IA se usa para reducir carga inmediata, no para entrenar habilidades.
+\item Se invierte tiempo estudiando, pero no se mide la preparaci\'on real alcanzada.
+\item La mayor\'ia de las estrategias de estudio se aprenden de forma aut\'onoma, sin formaci\'on expl\'icita.
+\item Existe una b\'usqueda constante de validaci\'on sobre si realmente se entendi\'o la materia.
+\item La retroalimentaci\'on inmediata aumenta la sensaci\'on de progreso y control.
+\item Hay frustraci\'on por invertir muchas horas sin resultados proporcionales.
+\item Se valoran las herramientas que reducen fricci\'on y organizaci\'on manual (p.\,ej. buscar material disperso en Canvas).
+\end{enumerate}
+
+% ---------------------------------------------------------------
+\section{Definici\'on de la Problem\'atica y Desaf\'io}
+% ---------------------------------------------------------------
+
+\subsection{Problema}
+
+\begin{quote}
+\itshape Los estudiantes universitarios tienen dificultades para identificar sus debilidades acad\'emicas antes de las evaluaciones, generando una falsa sensaci\'on de preparaci\'on que se evidencia reci\'en durante los cert\'amenes.
+\end{quote}
+
+Esto se agrava porque: (a) muchos estudiantes usan m\'etodos de estudio sin saber si realmente son efectivos para ellos; (b) el aprendizaje de estrategias de estudio ocurre mayoritariamente de forma aut\'odidacta, sin apoyo formal; y (c) la IA generativa se usa como fuente de respuestas inmediatas en lugar de herramienta de entrenamiento. El resultado es ansiedad acad\'emica, frustraci\'on y dificultad para mejorar el rendimiento de forma consistente.
+
+\subsection{Desaf\'io (How Might We)}
+
+\begin{center}
+\fbox{\parbox{0.85\textwidth}{\centering\large\bfseries \textquestiondown C\'omo podr\'iamos ayudar a Pablo a identificar sus puntos d\'ebiles antes del examen?}}
+\end{center}
+
+Esta pregunta gu\'ia permiti\'o enfocar el proyecto en una necesidad concreta y accionable: validar el nivel real de preparaci\'on del estudiante \emph{antes} de la evaluaci\'on, en lugar de despu\'es. Es pertinente porque nace directamente de la investigaci\'on (encuesta + Customer Journey Map) y es lo suficientemente espec\'ifica para guiar la ideaci\'on sin restringir prematuramente la soluci\'on.
+
+% ---------------------------------------------------------------
+\section{S\'intesis e Insights mediante QQPF}
+% ---------------------------------------------------------------
+
+A partir del Customer Journey Map se profundiz\'o en cinco momentos cr\'iticos de la experiencia de Pablo utilizando la t\'ecnica QQPF (\emph{Qu\'e sucede / Qu\'e pasa / Por qu\'e sucede / Fricci\'on que genera}), complementada con un ``Doble Click'' a las causas ra\'iz de cada fricci\'on. De cada QQPF se derivaron preguntas HMW adicionales que alimentaron la ideaci\'on.
+
+\begin{longtable}{@{}p{2.7cm} p{4.0cm} p{3.9cm} p{3.7cm}@{}}
+\toprule
+\textbf{QQPF} & \textbf{Qu\'e pasa / Por qu\'e} & \textbf{Fricci\'on} & \textbf{HMW derivado} \\
+\midrule
+\endhead
+1. Preparaci\'on pasiva & No logra recordar ni comprender profundamente; usa m\'etodos pasivos que funcionaban en el colegio pero no en la universidad. & Frustraci\'on: ``estudiar mucho no sirve''. & \textquestiondown C\'omo ayudar a Pablo a evaluar su comprensi\'on \emph{antes} del certamen? \\
+2. Uso superficial de IA & Cree que entiende porque la IA le da respuestas claras; llega en blanco al examen (ilusi\'on de competencia). & Falsa seguridad $\rightarrow$ malos resultados $\rightarrow$ ansiedad. & \textquestiondown C\'omo transformar la IA en una herramienta que entrene a Pablo en vez de darle respuestas? \\
+3. Procrastinaci\'on y sobrecarga & Estudia a \'ultima hora; su condici\'on de atenci\'on dificulta comenzar y no existe un sistema que reduzca esa barrera de entrada. & Culpa, ansiedad, ciclos de procrastinaci\'on. & \textquestiondown C\'omo hacer que Pablo empiece a estudiar sin que se sienta abrumador? \\
+4. Falta de autoevaluaci\'on & Termina de estudiar sin saber si aprendi\'o; descubre vac\'ios reci\'en en el certamen. & Incertidumbre, vac\'ios invisibles, mal desempe\~no. & \textquestiondown C\'omo automatizar su autoevaluaci\'on para que no dependa solo de su propio criterio? \\
+5. Replanteamiento confuso & Tras un mal resultado busca nuevos m\'etodos, pero encuentra consejos gen\'ericos no adaptados a su perfil, carrera ni estilo cognitivo. & Confusi\'on, sobreinformaci\'on, inseguridad. & \textquestiondown C\'omo ofrecerle a Pablo un m\'etodo personalizado y aplicable paso a paso? \\
+\bottomrule
+\caption{S\'intesis QQPF de los cinco momentos cr\'iticos identificados en el Customer Journey.}
+\end{longtable}
+
+Un patr\'on transversal a los cinco QQPF es que \textbf{Pablo no tiene forma de validar su propia comprensi\'on antes de que sea demasiado tarde}, y que las herramientas que hoy usa (lectura repetitiva, IA generativa gen\'erica) refuerzan esa falsa sensaci\'on de dominio en lugar de corregirla. Este patr\'on es el que termina defini\'endo la propuesta de valor del producto.
+
+% ---------------------------------------------------------------
+\section{Ideaci\'on y Selecci\'on de Idea}
+% ---------------------------------------------------------------
+
+\subsection{Proceso de ideaci\'on}
+
+Se aplicaron dos metodolog\'ias de generaci\'on de ideas sobre la pregunta HMW principal (\textquestiondown c\'omo podr\'iamos ayudar a Pablo a identificar sus puntos d\'ebiles antes del examen?):
+
+\begin{enumerate}
+\item \textbf{Brainstorming grupal}: sesi\'on abierta de generaci\'on de ideas sin filtro, en tiempo acotado.
+\item \textbf{Brainwriting estructurado}: cada integrante escribi\'o ideas de forma individual y las hizo circular para que el resto las complementara, evitando el sesgo de anclaje del brainstorming verbal.
+\end{enumerate}
+
+En conjunto se generaron m\'as de 30 ideas, que se agruparon en cinco familias:
+
+\begin{itemize}[itemsep=1pt]
+\item \textbf{Diagn\'ostico y autoevaluaci\'on}: ex\'amenes tipo, tests r\'apidos de conceptos clave, explicar la materia a un tercero (o grabarse explic\'andola) para detectar vac\'ios, ex\'amenes dise\~nados por el propio estudiante y resueltos por un software.
+\item \textbf{Reforzamiento de contenidos}: ejercicios que mezclen distintos ejes de la materia, refuerzo de conocimientos previos (unidades o cursos anteriores), preguntas de baja frecuencia para forzar distintos \'angulos del contenido.
+\item \textbf{Organizaci\'on y h\'abitos}: acceso centralizado al material de los cursos, recordatorios de estudio programables, aplicaci\'on de repetici\'on espaciada mediante notificaciones.
+\item \textbf{Motivaci\'on y gamificaci\'on}: Kahoots diarios, recompensas por calidad de explicaci\'on, colecci\'on de evaluaciones anteriores.
+\item \textbf{Reducci\'on de fricci\'on tecnol\'ogica}: bloqueo de distracciones, foro de preguntas, uso efectivo de herramientas digitales ya existentes.
+\end{itemize}
+
+\subsection{Idea seleccionada}
+
+\textbf{Agente de Inteligencia Artificial: profesor personalizado.} Su funci\'on principal es generar ex\'amenes tipo y detectar debilidades mediante retroalimentaci\'on, complementada con env\'io de notificaciones para repetici\'on espaciada, un sistema para organizar material y planificar el estudio, y un test de ``personalidad de estudio'' que oriente la ruta de aprendizaje de cada estudiante.
+
+\textbf{Justificaci\'on de la selecci\'on:} para generar aprendizaje real y buenos h\'abitos de estudio, el equipo decidi\'o partir por la detecci\'on de debilidades (con un examen tipo sobre los contenidos espec\'ificos que el estudiante necesita reforzar); una vez identificadas, se genera un plan de estudio personalizado y de f\'acil adherencia. Esto evita que el estudiante deba primero investigar por su cuenta qu\'e m\'etodo de estudio usar --- problema identificado en el QQPF 5 --- entreg\'andole en cambio un camino simple y efectivo en el largo plazo. Las dem\'as ideas (notificaciones, bloqueo de distracciones, gamificaci\'on) se incorporaron como funcionalidades complementarias del mismo servicio.
+
+% ---------------------------------------------------------------
+\section{Propuesta de Valor y Modelo de Negocio}
+% ---------------------------------------------------------------
+
+\subsection{Propuesta de valor}
+
+\begin{center}
+\fbox{\parbox{0.85\textwidth}{\centering \textbf{Atenea transforma la IA en un tutor de entrenamiento activo}: una plataforma integrada autom\'aticamente con Canvas LMS que ayuda a los estudiantes a detectar sus debilidades acad\'emicas mediante retroalimentaci\'on personalizada, en lugar de entregarles respuestas.}}
+\end{center}
+
+\noindent\textbf{Beneficios clave:} mejora en resultados acad\'emicos; eliminaci\'on de la falsa sensaci\'on de preparaci\'on; est\'imulos din\'amicos que aumentan la motivaci\'on; ahorro del tiempo que hoy se pierde buscando material disperso.
+
+\subsection{Modelo de negocio (Business Model Canvas)}
+
+\begin{longtable}{@{}>{\bfseries}p{4.2cm} p{10.3cm}@{}}
+\toprule
+Segmento de clientes & \textbf{Primario:} estudiantes universitarios usuarios de Canvas LMS. \textbf{Secundario:} universidades interesadas en mejorar el rendimiento y la retenci\'on estudiantil. \\
+Propuesta de valor & Plataforma integrada autom\'aticamente con Canvas que detecta debilidades acad\'emicas mediante IA personalizada y entrenamiento activo, sin requerir que el estudiante suba o configure material manualmente. \\
+Canales & Plataforma web, redes sociales, convenios universitarios, difusi\'on estudiantil boca a boca. \\
+Relaci\'on con clientes & Retroalimentaci\'on personalizada, seguimiento de progreso, recomendaciones adaptativas, notificaciones acad\'emicas. \\
+Flujo de ingresos & Modelo \emph{freemium} con suscripci\'on premium para el estudiante; convenios institucionales de pago con universidades. \\
+Recursos clave & Integraci\'on API con Canvas, infraestructura tecnol\'ogica (base vectorial, servicios de IA), equipo de desarrollo. \\
+Actividades clave & Desarrollo de software, mantenimiento de la integraci\'on con Canvas, generaci\'on de ejercicios, personalizaci\'on del aprendizaje, soporte t\'ecnico. \\
+\bottomrule
+\caption{Business Model Canvas de Proyecto Atenea.}
+\end{longtable}
+
+\subsection{Diferenciaci\'on}
+
+La diferenciaci\'on principal de Atenea frente a asistentes de IA gen\'ericos (ChatGPT, Gemini) es su \textbf{integraci\'on autom\'atica con Canvas LMS}: mientras otras soluciones exigen subir archivos y configurar contenido manualmente, Atenea permite comenzar a estudiar directamente con los contenidos reales de los cursos del estudiante, sin fricci\'on inicial. A esto se suma su enfoque espec\'ifico en detectar debilidades, generar entrenamiento activo (pedagog\'ia socr\'atica, no respuestas directas) y entregar retroalimentaci\'on personalizada. El objetivo no es reemplazar el estudio, sino hacerlo m\'as efectivo.
+
+% ---------------------------------------------------------------
+\section{Descripci\'on y Definici\'on de la Soluci\'on}
+% ---------------------------------------------------------------
+
+\subsection{Visi\'on del producto (Inception)}
+
+\begin{longtable}{@{}>{\bfseries}p{3.8cm} p{10.7cm}@{}}
+\toprule
+Visi\'on & Plataforma web que transforma la IA en un tutor de entrenamiento activo, ayudando a estudiantes universitarios a detectar sus debilidades acad\'emicas antes de las evaluaciones mediante retroalimentaci\'on personalizada. \\
+Usuarios & \textbf{Primario:} estudiantes universitarios usuarios de Canvas LMS. \textbf{Secundario:} universidades interesadas en mejorar el rendimiento y la retenci\'on. \\
+Dentro del alcance & Integraci\'on API con Canvas; chatbot socr\'atico de entrenamiento; diagn\'ostico de debilidades; recomendaci\'on de m\'etodos de estudio; plan de estudio personalizado; agendamiento y notificaciones de repetici\'on espaciada. \\
+Fuera del alcance & Reemplazo del docente o la clase presencial; gesti\'on de notas oficiales; evaluaciones presenciales; contenido externo fuera de Canvas. \\
+Criterios de \'exito & Detectar m\'inimo 3 debilidades por sesi\'on; sincronizaci\'on con Canvas en menos de 30 segundos; retenci\'on semanal de uso mayor a 60\%; satisfacci\'on del estudiante mayor a 4/5. \\
+\bottomrule
+\caption{Inception del proyecto: visi\'on, usuarios, alcance y criterios de \'exito.}
+\end{longtable}
+
+\subsection{Flujo funcional y arquitectura}
+
+El sistema se organiza en cuatro grandes bloques: (1) ingesta de material desde Canvas, (2) indexaci\'on en una base de conocimiento vectorial, (3) un motor conversacional con pedagog\'ia socr\'atica, y (4) los m\'odulos de organizaci\'on y m\'etodos de estudio que act\'uan sobre el mismo material indexado.
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[
+  node distance=1.0cm and 1.15cm,
+  every node/.style={font=\small},
+  box/.style={draw, thick, rounded corners=4pt, align=center, text width=3.05cm, minimum height=1.35cm, inner sep=5pt},
+  external/.style={box, draw=black!45, fill=black!5},
+  core/.style={box, draw=atenea, fill=ateneaclaro},
+  product/.style={box, draw=atenea!70!black, fill=atenea!14},
+  stage/.style={font=\scriptsize\itshape, atenea!70!black},
+  arr/.style={-Stealth, thick, atenea!80!black, line width=0.9pt}
+]
+
+\node[external] (canvas) {\textbf{Canvas LMS}\\[2pt] cursos, m\'odulos,\\p\'aginas, fechas};
+\node[core, right=of canvas] (sync) {\textbf{Sincronizaci\'on}\\[2pt] y parseo\\(PDF/DOCX/PPTX)};
+\node[core, right=of sync] (vs) {\textbf{ChromaDB}\\[2pt] embeddings\\Ollama \mbox{multiling\"ue}};
+\node[core, right=of vs] (chat) {\textbf{Chatbot RAG}\\[2pt] socr\'atico\\(Groq / Ollama)};
+
+\node[product, below=of sync] (met) {\textbf{M\'etodos de}\\[2pt] estudio + Pomodoro};
+\node[product, below=of vs] (org) {\textbf{Organizaci\'on}\\[2pt] agenda, plan IA};
+\node[product, below=of chat] (web) {\textbf{Interfaz Web}\\[2pt] FastAPI + JS};
+
+\node[stage, above=2pt of canvas] {Sistema externo};
+\node[stage, above=2pt of sync] {Ingesta};
+\node[stage, above=2pt of vs] {Conocimiento};
+\node[stage, above=2pt of chat] {Motor conversacional};
+
+\begin{scope}[on background layer]
+\node[draw=atenea!55, dashed, rounded corners=10pt, fill=atenea!4,
+      fit=(sync)(vs)(chat)(met)(org)(web), inner sep=13pt] (platform) {};
+\node[atenea, font=\bfseries\small, anchor=south west] at (platform.north west) {Plataforma Atenea};
+\end{scope}
+
+\draw[arr] (canvas) -- (sync);
+\draw[arr] (sync) -- (vs);
+\draw[arr] (vs) -- (chat);
+\draw[arr] (chat) -- (web);
+\draw[arr] (vs.south) -- (org.north);
+\draw[arr] (org) -- (web);
+\draw[arr] (sync.south) -- (met.north);
+\end{tikzpicture}
+\caption{Arquitectura general de Atenea: del material crudo de Canvas a la interacci\'on socr\'atica con el estudiante. La l\'inea punteada delimita lo que corresponde a la plataforma desarrollada por el equipo, frente a Canvas como sistema externo.}
+\end{figure}
+
+\subsubsection{L\'ogica del tutor socr\'atico}
+
+El chatbot no es un simple wrapper de un LLM: implementa una peque\~na m\'aquina de estados que decide cu\'ando guiar con preguntas y cu\'ando explicar un concepto base.
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[
+  node distance=0.7cm and 1.1cm,
+  st/.style={draw=atenea, thick, rounded corners, fill=white, align=center, minimum height=0.9cm, minimum width=2.6cm, font=\small},
+  arr/.style={-Stealth, thick, atenea}
+]
+\node[st] (intent) {Detecci\'on de\\intenci\'on (regex)};
+\node[st, right=of intent] (guard) {Guardas de\\seguridad / anti-eco};
+\node[st, right=of guard] (rag) {Recuperaci\'on RAG\\anclada a la unidad};
+\node[st, below=of rag] (state) {M\'aquina de estados\\(estudiar / ejercitar / preguntar)};
+\node[st, below=of state] (llm) {LLM (Groq $\rightarrow$\\fallback Ollama)};
+\node[st, left=of llm] (latex) {Normalizaci\'on\\LaTeX + finalizado};
+\node[st, left=of latex] (quick) {Quick-replies\\seg\'un estado};
+
+\draw[arr] (intent) -- (guard);
+\draw[arr] (guard) -- (rag);
+\draw[arr] (rag) -- (state);
+\draw[arr] (state) -- (llm);
+\draw[arr] (llm) -- (latex);
+\draw[arr] (latex) -- (quick);
+\end{tikzpicture}
+\caption{Flujo de procesamiento de cada turno del chat socr\'atico.}
+\end{figure}
+
+\subsection{Stack tecnol\'ogico}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}l Y@{}}
+\toprule
+\textbf{Capa} & \textbf{Tecnolog\'ia} \\
+\midrule
+Lenguaje & Python \\
+Base de datos vectorial & ChromaDB (cliente persistente) \\
+Embeddings & Ollama \texttt{paraphrase-multilingual} (comprende espa\~nol) \\
+LLM / Chat & Groq (\texttt{llama-3.3-70b-versatile}, nube, gratuito) por defecto; Ollama local como respaldo sin conexi\'on \\
+Integraci\'on Canvas & API REST de Canvas (token Bearer): archivos, m\'odulos, p\'aginas, anuncios y fechas de evaluaciones \\
+Web & FastAPI + Jinja2 + JavaScript, con marked.js y KaTeX servidos localmente para renderizar Markdown y LaTeX \\
+Configuraci\'on & Variables de entorno (\texttt{.env}) \\
+\bottomrule
+\end{tabularx}
+\caption{Stack tecnol\'ogico de Atenea.}
+\end{table}
+
+\subsection{Funcionalidades principales}
+
+\begin{itemize}
+\item \textbf{Integraci\'on con Canvas LMS}: sincroniza autom\'aticamente cursos, archivos (pesta\~na de Archivos y M\'odulos), p\'aginas, anuncios y fechas de evaluaciones, eliminando la necesidad de subir material manualmente.
+\item \textbf{Chatbot de entrenamiento socr\'atico}: genera preguntas y ejercicios, eval\'ua respuestas, entrega retroalimentaci\'on y gu\'ia al estudiante hacia su propia respuesta en lugar de entreg\'arsela.
+\item \textbf{Detecci\'on de debilidades}: a partir del desempe\~no y las conversaciones del estudiante, identifica contenidos d\'ebiles, errores frecuentes y temas prioritarios de refuerzo (m\'odulo de an\'alisis).
+\item \textbf{Recomendaci\'on de m\'etodos de estudio}: ocho m\'etodos con recomendaci\'on autom\'atica seg\'un el curso y las debilidades detectadas, aplicables directamente dentro de la sesi\'on de chat.
+\item \textbf{Organizaci\'on autom\'atica}: agenda con fechas reales de Canvas y eventos propios, agendamiento en \textbf{lenguaje natural} (``tengo control de integrales en una semana m\'as'') que genera autom\'aticamente un plan de estudio d\'ia a d\'ia editable.
+\item \textbf{Gestor de archivos}: navegaci\'on, reorganizaci\'on autom\'atica y previsualizaci\'on del material descargado desde Canvas, al estilo de un explorador de archivos.
+\end{itemize}
+
+\subsection{Requerimientos no funcionales}
+
+\begin{itemize}[itemsep=1pt]
+\item \textbf{Velocidad de respuesta}: uso de Groq como proveedor de LLM por defecto para respuestas en 1--3 segundos con streaming, con Ollama local como respaldo si no hay conexi\'on o se agota la cuota gratuita.
+\item \textbf{Privacidad}: el token de Canvas del estudiante se almacena localmente y nunca se expone en el cliente.
+\item \textbf{Bajo costo}: toda la soluci\'on se construye sobre servicios con nivel gratuito (Groq free tier, Ollama local, ChromaDB embebido), validando la viabilidad del modelo \emph{freemium}.
+\item \textbf{Robustez pedag\'ogica}: defensas deterministas contra inyecci\'on de prompts y contra fuga accidental de soluciones, para que el modelo de lenguaje no viole la pedagog\'ia socr\'atica aunque el usuario intente forzarlo.
+\end{itemize}
+
+% ---------------------------------------------------------------
+\section{Planificaci\'on del Prototipado}
+% ---------------------------------------------------------------
+
+\subsection{Historias de usuario y criterios de aceptaci\'on}
+
+De m\'as de 15 historias de usuario levantadas con el equipo (estudiantes y tambi\'en profesores, como actor secundario), se priorizaron las siguientes cinco por su relaci\'on directa con el desaf\'io HMW:
+
+\begin{longtable}{@{}p{4.6cm} p{5.4cm} p{4.5cm}@{}}
+\toprule
+\textbf{Historia} & \textbf{Necesidad} & \textbf{Criterio de aceptaci\'on} \\
+\midrule
+\endhead
+Acceso a material & Como estudiante quiero acceder a todos los archivos de mis clases en una interfaz ordenada, para no perder tiempo busc\'andolos. & Sincronizaci\'on autom\'atica con Canvas en menos de 30 segundos, con filtros de b\'usqueda disponibles. \\
+Ejercicios r\'apidos & Como estudiante quiero tener ejercicios nuevos y actualizados al alcance de un bot\'on. & Ejercicios disponibles en menos de 10 segundos desde el contenido sincronizado de Canvas. \\
+Detecci\'on de debilidades & Como estudiante quiero que me ayuden a detectar mis debilidades para enfocar mi estudio en corregirlas. & El sistema identifica m\'inimo 3 \'areas d\'ebiles con porcentaje de acierto por tema tras cada sesi\'on diagn\'ostica. \\
+Retroalimentaci\'on personalizada & Como estudiante quiero saber d\'onde y por qu\'e me equivoqu\'e. & Cada respuesta incorrecta genera una explicaci\'on espec\'ifica del error y un ejercicio de refuerzo inmediato. \\
+Recomendaci\'on de m\'etodos & Como estudiante quiero que me recomienden m\'etodos de estudio seg\'un mis errores, para no probarlos al azar. & La recomendaci\'on personalizada aparece autom\'aticamente tras completar cada evaluaci\'on diagn\'ostica. \\
+\bottomrule
+\caption{Historias de usuario priorizadas con sus criterios de aceptaci\'on.}
+\end{longtable}
+
+\subsection{Story map y backlog priorizado}
+
+El backlog se organiz\'o en cuatro tandas de entrega (\'epicas), coherentes con la propuesta de valor: primero asegurar el ``camino cr\'itico'' (conectar Canvas y poder estudiar con el chatbot), luego ampliar hacia la organizaci\'on del estudio, despu\'es hacia los m\'etodos y h\'abitos, y finalmente pulir la experiencia completa.
+
+\begin{longtable}{@{}>{\bfseries}p{3cm} p{11.5cm}@{}}
+\toprule
+MVP (camino cr\'itico) & Cliente Canvas API; ingesta y parseo de archivos (PDF/DOCX/PPTX); base vectorial; chatbot RAG con pedagog\'ia socr\'atica b\'asica; interfaz web m\'inima. \\
+Iteraci\'on 2 & Redise\~no visual definitivo; el chatbot pasa a ser la pantalla de inicio; soporte LaTeX; sincronizaci\'on autom\'atica con Canvas al iniciar sesi\'on. \\
+Iteraci\'on 3 & Motor de IA conmutable (Groq/Ollama) para velocidad; m\'odulo de Organizaci\'on (agenda con fechas reales, plan de estudio generado por IA); m\'odulo de M\'etodos de estudio; modo Demo sin backend. \\
+Iteraci\'on 4 & Descarga de material desde M\'odulos de Canvas (no solo la pesta\~na de Archivos); optimizaci\'on de RAG; m\'etodos de estudio seleccionables dentro de la sesi\'on; defensas de robustez del agente (anti inyecci\'on de prompt, anti fuga de soluciones). \\
+Iteraci\'on 5 (walkthrough final) & Login/onboarding con token de Canvas; gestor de archivos estilo Canvas con orden autom\'atico; agendamiento en lenguaje natural con plan autom\'atico d\'ia a d\'ia; Pomodoro global; historial de sesiones por curso; correcci\'on de fidelidad tem\'atica del chatbot al ramo activo. \\
+\bottomrule
+\caption{Story map / backlog priorizado, ejecutado como iteraciones de desarrollo real (ver secci\'on de iteraciones).}
+\end{longtable}
+
+% ---------------------------------------------------------------
+\section{Proceso de Iteraci\'on del Prototipo}
+% ---------------------------------------------------------------
+
+El prototipo se desarroll\'o de forma incremental bajo control de versiones (Git), lo que permite reconstruir la evoluci\'on real del producto a partir del historial de cambios del repositorio. Cada iteraci\'on se valid\'o antes de avanzar a la siguiente, y desde la iteraci\'on 4 el equipo incorpor\'o una bater\'ia de pruebas automatizadas de regresi\'on (\texttt{test\_agent\_eval.py}) que creci\'o junto con el producto.
+
+\begin{longtable}{@{}p{2.9cm} p{2.1cm} p{9.7cm}@{}}
+\toprule
+\textbf{Versi\'on} & \textbf{Fecha} & \textbf{Hito principal y evidencia} \\
+\midrule
+\endhead
+v0.1 --- Conceptual & 20-05-2026 & Informe de Prototipado: investigaci\'on, persona, CJM, propuesta de soluci\'on y modelo de negocio definidos antes de escribir c\'odigo. \\
+v0.2 --- Base (\texttt{6bfd917}) & 20-05-2026 & Primer commit funcional: cliente de Canvas API, ingesta de documentos y chatbot b\'asico. \\
+v0.3 (\texttt{f02b594}) & 24-05-2026 & Mejoras al chatbot y a la sincronizaci\'on de archivos. \\
+v0.4 (\texttt{f670299}) & 01-06-2026 & Rediseño de interfaz (paleta celeste/blanca), el chat pasa a ser la pantalla de inicio, integraci\'on autom\'atica con Canvas, soporte de LaTeX. \\
+v0.5 (\texttt{3ee88a2}) & 15-06-2026 & M\'odulo de Organizaci\'on (calendario, eventos, plan de estudio generado por IA), m\'odulo de M\'etodos de estudio, modo Demo. Motor de IA conmutable Groq/Ollama para resolver la lentitud del modelo local. \\
+v0.6 (\texttt{95c79aa}) & 21-06-2026 & Descarga de material desde M\'odulos de Canvas; optimizaci\'on del RAG; m\'etodos de estudio seleccionables en sesi\'on; bater\'ia de pruebas de regresi\'on (46 casos) que detect\'o y permiti\'o corregir vulnerabilidades de inyecci\'on de prompt y fugas de pedagog\'ia socr\'atica. \\
+v0.7 --- Walkthrough final & 01-07-2026 al 03-07-2026 & Login/onboarding, gestor de archivos, agendamiento en lenguaje natural con plan autom\'atico, Pomodoro global, historial de sesiones por curso, y correcci\'on de un bug de fidelidad tem\'atica (el chatbot generaba ejercicios de c\'alculo dentro de un ramo de \'Algebra Lineal), validada con un bloque de pruebas dise\~nado para reproducir el bug antes y despu\'es del fix. \\
+\bottomrule
+\caption{Registro de iteraciones del prototipo, trazado a partir del historial de control de versiones y de las bater\'ias de pruebas de cada etapa.}
+\end{longtable}
+
+Cada iteraci\'on agreg\'o funcionalidad sin romper la anterior: la bater\'ia de pruebas de regresi\'on creci\'o desde un conjunto inicial de casos deterministas hasta los 46 casos (incluyendo llamadas en vivo al LLM) alcanzados en la v0.6, y sum\'o despu\'es un \emph{smoke test} de 28 casos adicionales en la v0.7, todos en verde antes de dar por cerrada cada etapa. El video de demostraci\'on adjunto a esta entrega muestra la interfaz correspondiente a la versi\'on v0.7, que es la que se entrega como prototipo final.
+
+% ---------------------------------------------------------------
+\section{Funcionalidad del Prototipo Final}
+% ---------------------------------------------------------------
+
+El prototipo se encuentra \textbf{funcional de extremo a extremo}. El flujo completo que puede ejecutar un estudiante hoy es:
+
+\begin{enumerate}
+\item Ingresa a la plataforma y conecta su cuenta de Canvas pegando su token una sola vez (login persistente).
+\item La plataforma sincroniza en segundo plano sus cursos y descarga todos los archivos (pesta\~na de Archivos y M\'odulos), sin intervenci\'on manual.
+\item El material se organiza autom\'aticamente por curso y unidad, y se indexa en la base de conocimiento vectorial.
+\item El estudiante elige un modo (estudiar / ejercitar / preguntar), un curso y una unidad; Atenea le recomienda un m\'etodo de estudio adecuado a ese curso.
+\item Conversa con el chatbot socr\'atico, que responde con streaming, LaTeX renderizado y preguntas de opci\'on r\'apida (\emph{quick replies}) seg\'un el estado de la conversaci\'on.
+\item En la secci\'on de Organizaci\'on puede escribir en lenguaje natural una evaluaci\'on pr\'oxima y recibir autom\'aticamente el evento agendado y un plan de estudio d\'ia a d\'ia editable.
+\item En la secci\'on de M\'etodos de estudio puede revisar recomendaciones personalizadas, probar cualquier m\'etodo directamente en el chat, y usar un Pomodoro que persiste como widget flotante mientras navega por el resto de la aplicaci\'on.
+\item Puede administrar sus archivos (mover, renombrar, previsualizar, subir material propio) desde un gestor de archivos dedicado.
+\item Puede retomar cualquier conversaci\'on anterior desde un historial de sesiones agrupado por curso.
+\end{enumerate}
+
+Este flujo fue verificado mediante pruebas automatizadas end-to-end (con cliente HTTP de pruebas contra la aplicaci\'on real, no mockeada) y qued\'o adem\'as registrado en el video de demostraci\'on adjunto.
+
+% ---------------------------------------------------------------
+\section{Casos de Uso del Prototipo}
+% ---------------------------------------------------------------
+
+\begin{longtable}{@{}>{\bfseries}p{3.6cm} p{11cm}@{}}
+\toprule
+\textbf{Caso de uso 1} & \textbf{Ejercitar con pedagog\'ia socr\'atica} \\
+\midrule
+Actor & Estudiante con material ya sincronizado desde Canvas. \\
+Flujo & Elige modo ``ejercitar'' $\rightarrow$ curso (p.\,ej. C\'alculo Integral) $\rightarrow$ unidad $\rightarrow$ pide un ejercicio (``dame un ejercicio de integrales impropias''). Atenea genera el enunciado con LaTeX renderizado, bas\'andose en el material real del curso. El estudiante intenta una respuesta parcial; Atenea no entrega la soluci\'on: gu\'ia con preguntas y ofrece pistas incrementales hasta que el estudiante llega por s\'i mismo a la respuesta. \\
+Resultado & El estudiante practica un ejercicio alineado con su curso real y refuerza comprensi\'on, no memorizaci\'on. \\
+\midrule
+\textbf{Caso de uso 2} & \textbf{Agendamiento en lenguaje natural con plan de estudio autom\'atico} \\
+\midrule
+Actor & Estudiante con una evaluaci\'on pr\'oxima. \\
+Flujo & Escribe en la caja ``Dile a Atenea'' (u opcionalmente en el chat) la frase ``tengo control de integrales en una semana m\'as''. El sistema extrae fecha, curso y tema, crea el evento en el calendario y genera autom\'aticamente un plan de estudio d\'ia a d\'ia hasta la fecha del control, cada d\'ia como un evento editable. \\
+Resultado & El estudiante obtiene, sin llenar ning\'un formulario, un plan concreto de qu\'e estudiar cada d\'ia antes de su evaluaci\'on. \\
+\midrule
+\textbf{Caso de uso 3} & \textbf{Recomendaci\'on y aplicaci\'on de un m\'etodo de estudio} \\
+\midrule
+Actor & Estudiante que no sabe qu\'e m\'etodo de estudio usar para un curso espec\'ifico. \\
+Flujo & En la secci\'on M\'etodos de estudio revisa las recomendaciones personalizadas para su curso, elige uno (p.\,ej. t\'ecnica Feynman) y presiona ``Probar este m\'etodo''; se abre el chat con ese m\'etodo ya aplicado a la pedagog\'ia del tutor. Puede tambi\'en iniciar un Pomodoro que sigue corriendo aunque navegue a otra secci\'on. \\
+Resultado & El estudiante deja de elegir m\'etodos al azar (QQPF 5) y aplica uno personalizado de inmediato. \\
+\midrule
+\textbf{Caso de uso 4} & \textbf{Organizaci\'on del material descargado de Canvas} \\
+\midrule
+Actor & Estudiante con material reci\'en sincronizado y desordenado (subcarpetas de M\'odulos, evaluaciones antiguas, etc.). \\
+Flujo & Entra al gestor de archivos, revisa las carpetas por curso, usa ``Ordenar curso'' para que el sistema proponga una reorganizaci\'on autom\'atica (evaluaciones anteriores, material por unidad), revisa el plan propuesto y lo aplica (o lo deshace si no le convence). \\
+Resultado & El material queda organizado sin que el estudiante deba clasificar manualmente decenas de archivos, resolviendo directamente la historia de usuario ``Acceso a material''. \\
+\bottomrule
+\caption{Casos de uso ejecutables en el prototipo final, coherentes con las historias de usuario priorizadas.}
+\end{longtable}
+
+% ---------------------------------------------------------------
+\section{Presentaci\'on y Comunicaci\'on del Prototipo}
+% ---------------------------------------------------------------
+
+Junto a este informe se entrega un \textbf{video de demostraci\'on} del prototipo funcionando, que recorre las mismas secciones descritas como casos de uso: (1) login y conexi\'on con Canvas, (2) chatbot socr\'atico con LaTeX renderizado en vivo, (3) gestor de archivos con arrastrar y soltar, (4) agendamiento en lenguaje natural y plan de estudio autom\'atico, y (5) m\'etodos de estudio con Pomodoro persistente. El gui\'on completo de grabaci\'on, con tiempos sugeridos por secci\'on y frases clave para narrar cada demostraci\'on, se document\'o de forma independiente para asegurar que el video cubra el funcionamiento real de principio a fin sin depender de la memoria del presentador.
+
+El video de demostraci\'on completo est\'a disponible en: \url{https://youtu.be/Z9xSjbl6z20}
+
+% ---------------------------------------------------------------
+\section{Conclusi\'on}
+% ---------------------------------------------------------------
+
+La investigaci\'on realizada --- encuesta a 83 estudiantes, revisi\'on de literatura cient\'ifica sobre autorregulaci\'on del aprendizaje, y herramientas de Design Thinking (Persona, JTBD, Customer Journey Map, QQPF) --- confirm\'o que el problema de los estudiantes universitarios no es principalmente cognitivo, sino estrat\'egico: no cuentan con una forma confiable de validar su propia comprensi\'on antes de que sea evaluada, y el uso superficial de la IA generativa agrava esa falsa sensaci\'on de preparaci\'on en lugar de corregirla.
+
+A partir de esa evidencia, el equipo dise\~n\'o y desarroll\'o \textbf{Atenea}, una plataforma que integra autom\'aticamente el material real de los cursos de Canvas y transforma la IA en un tutor de entrenamiento activo con pedagog\'ia socr\'atica, en lugar de un generador de respuestas. El producto se construy\'o de forma iterativa a lo largo de siete versiones documentadas (la primera de dise\~no conceptual y las seis siguientes trazables en el control de versiones), cada una validada con pruebas de regresi\'on antes de avanzar, y hoy se encuentra \textbf{funcional de extremo a extremo}: desde la conexi\'on con Canvas hasta la organizaci\'on autom\'atica del estudio, pasando por la detecci\'on de debilidades y la recomendaci\'on personalizada de m\'etodos de estudio.
+
+El resultado responde directamente al desaf\'io planteado al inicio del proyecto --- \textquestiondown c\'omo podr\'iamos ayudar a Pablo a identificar sus puntos d\'ebiles antes del examen? --- y deja como pr\'oximo paso natural la validaci\'on del producto con usuarios reales para medir los criterios de \'exito definidos en la etapa de \emph{Inception}: retenci\'on semanal de uso y satisfacci\'on percibida.
+
+% ---------------------------------------------------------------
+\addcontentsline{toc}{section}{Referencias}
+% ---------------------------------------------------------------
+
+\begin{thebibliography}{99}
+
+\bibitem{uchile81} Universidad de Chile. \emph{Seg\'un estudio de la U. de Chile, el 81\% de sus estudiantes de primer a\~no usa IA}. \url{https://uchile.cl/noticias/227747/81-de-estudiantes-de-primer-ano-de-la-u-de-chile-usa-ia}
+
+\bibitem{brunner2025} Brunner, J.\,J. (2025). \emph{\textquestiondown C\'omo utilizan realmente los estudiantes la IA?} \url{https://brunner.cl/2025/08/como-utilizan-realmente-los-estudiantes-la-ia/}
+
+\bibitem{dialnet8083934} \emph{H\'abitos de estudio y aprendizaje autorregulado en estudiantes universitarios}. Dialnet. \url{https://dialnet.unirioja.es/descarga/articulo/8083934.pdf}
+
+\bibitem{redalyc44074795017} \emph{Rendimiento acad\'emico y autorregulaci\'on del aprendizaje en estudiantes universitarios}. Redalyc. \url{https://www.redalyc.org/journal/440/44074795017/html/}
+
+\bibitem{redalyc18066677016} \emph{Procrastinaci\'on, ansiedad ante los ex\'amenes y rendimiento acad\'emico}. Redalyc. \url{https://www.redalyc.org/journal/180/18066677016/html/}
+
+\bibitem{cade} Universidad de Concepci\'on. \emph{CADE --- Centro de Apoyo al Desarrollo del Estudiante}. \url{https://cade.udec.cl/}
+
+\bibitem{sctchile} \emph{Manual para la implementaci\'on del Sistema de Cr\'editos Transferibles SCT-Chile en el pregrado UDD}. \url{https://innovaciondocente.udd.cl/files/2022/05/manual-sct-udd_pregrado-1.pdf}
+
+\bibitem{nmedsup} \emph{Transici\'on a la educaci\'on superior: expectativas y desaf\'ios}. NMedSup, Policy Brief N\textdegree 10. \url{https://nmedsup.cl/wp-content/uploads/2022/07/PolicyBrief_10.pdf}
+
+\bibitem{scielorendimiento} \emph{Rendimiento acad\'emico y h\'abitos de estudio en estudiantes de educaci\'on superior}. SciELO. \url{http://scielo.sld.cu/scielo.php?script=sci_arttext&pid=S1990-86442021000400017}
+
+\bibitem{funcasIA} Sanz, I. \emph{Ventajas y desventajas de la IA en la educaci\'on: el caso de los tutores individualizados}. Funcas. \url{https://www.funcas.es/wp-content/uploads/2025/07/PEE-184_Ismael_Sanz.pdf}
+
+\end{thebibliography}
+
+\vspace{1cm}
+\noindent\small La lista completa de fuentes consultadas en la investigaci\'on secundaria (m\'as de 25 referencias adicionales) se encuentra en el documento de trabajo \emph{``M\'etodos de Estudio Universitario en Chile''} elaborado por el equipo durante la etapa de investigaci\'on.
+
+\end{document}
